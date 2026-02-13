@@ -9,18 +9,17 @@ import (
 	"github.com/korjavin/reviewbot/internal/config"
 )
 
-func NewInstallationClient(cfg *config.Config, installationID int64) (*gh.Client, error) {
-	var transport *ghinstallation.Transport
-	var err error
-
+func NewInstallationTransport(cfg *config.Config, installationID int64) (*ghinstallation.Transport, error) {
 	if cfg.PrivateKeyPath != "" {
-		transport, err = ghinstallation.NewKeyFromFile(http.DefaultTransport, cfg.AppID, installationID, cfg.PrivateKeyPath)
-	} else {
-		transport, err = ghinstallation.New(http.DefaultTransport, cfg.AppID, installationID, []byte(cfg.PrivateKey))
+		return ghinstallation.NewKeyFromFile(http.DefaultTransport, cfg.AppID, installationID, cfg.PrivateKeyPath)
 	}
+	return ghinstallation.New(http.DefaultTransport, cfg.AppID, installationID, []byte(cfg.PrivateKey))
+}
+
+func NewInstallationClient(cfg *config.Config, installationID int64) (*gh.Client, error) {
+	transport, err := NewInstallationTransport(cfg, installationID)
 	if err != nil {
 		return nil, fmt.Errorf("creating github transport: %w", err)
 	}
-
 	return gh.NewClient(&http.Client{Transport: transport}), nil
 }

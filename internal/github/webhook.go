@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/bradleyfalzon/ghinstallation/v2"
 	gh "github.com/google/go-github/v68/github"
 	"github.com/korjavin/reviewbot/internal/config"
 	"github.com/korjavin/reviewbot/internal/handler"
@@ -12,6 +13,10 @@ import (
 func NewWebhookHandler(cfg *config.Config) http.HandlerFunc {
 	newClient := func(installationID int64) (*gh.Client, error) {
 		return NewInstallationClient(cfg, installationID)
+	}
+
+	newTransport := func(installationID int64) (*ghinstallation.Transport, error) {
+		return NewInstallationTransport(cfg, installationID)
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +41,7 @@ func NewWebhookHandler(cfg *config.Config) http.HandlerFunc {
 		case *gh.PingEvent:
 			handler.HandlePing(e)
 		case *gh.PullRequestEvent:
-			go handler.HandlePullRequest(newClient, e)
+			go handler.HandlePullRequest(newClient, newTransport, e)
 		case *gh.IssueCommentEvent:
 			go handler.HandleIssueComment(newClient, e)
 		default:

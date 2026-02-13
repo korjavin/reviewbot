@@ -8,7 +8,7 @@ RUN CGO_ENABLED=0 go build -o /reviewbot main.go
 
 FROM alpine:3.21
 WORKDIR /app
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates git
 
 COPY --from=builder /reviewbot /app/reviewbot
 
