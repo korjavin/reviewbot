@@ -1,10 +1,26 @@
 services:
   reviewbot:
-    build: .
-    ports:
-      - "${PORT:-8080}:${PORT:-8080}"
-    env_file:
-      - .env
-    volumes:
-      - ./private-key.pem:/app/private-key.pem:ro
+    image: ghcr.io/korjavin/reviewbot:latest
+    container_name: reviewbot
+    networks:
+      - traefik_network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.reviewbot.rule=Host(`${HOSTNAME}`)"
+      - "traefik.http.routers.reviewbot.entrypoints=websecure"
+      - "traefik.http.routers.reviewbot.tls.certresolver=myresolver"
+      - "traefik.http.services.reviewbot.loadbalancer.server.port=8080"
     restart: unless-stopped
+    environment:
+      - GITHUB_APP_ID=${GITHUB_APP_ID}
+      - GITHUB_PRIVATE_KEY=${GITHUB_PRIVATE_KEY}
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+      - PORT=${PORT:-8080}
+      - BASE_URL=${BASE_URL}
+
+networks:
+  traefik_network:
+    name: ${NETWORK_NAME:-traefik_network}
+    external: true
