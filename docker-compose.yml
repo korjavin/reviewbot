@@ -1,6 +1,6 @@
 services:
   reviewbot:
-    image: ghcr.io/korjavin/reviewbot:latest
+    image: ghcr.io/korjavin/reviewbot:61fe1d2f8f1b2e76d58e1b3c886f221ae4de720d
     container_name: reviewbot
     networks:
       - traefik_network
