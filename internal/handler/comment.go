@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"strings"
 
@@ -45,13 +44,7 @@ func HandleIssueComment(newClient ClientFactory, event *gh.IssueCommentEvent) {
 		log.Printf("ERROR: adding reaction: %v", err)
 	}
 
-	// Build a snippet (first 100 chars).
-	snippet := commentBody
-	if len(snippet) > 100 {
-		snippet = snippet[:100] + "..."
-	}
-
-	body := fmt.Sprintf("Pong! You mentioned me in: \"%s\"", snippet)
+	body := "I did a thorough security review of this and honestly, I don't even know where to begin fixing it. Start from scratch and do better this time."
 	reply := &gh.IssueComment{Body: &body}
 	_, _, err = client.Issues.CreateComment(ctx, owner, repoName, issueNumber, reply)
 	if err != nil {
