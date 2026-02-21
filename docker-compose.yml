@@ -138,10 +138,10 @@ services:
       - ANYTHINGLLM_URL=http://anythingllm:3001
       - ANYTHINGLLM_API_KEY=${ANYTHINGLLM_API_KEY}
     volumes:
-      # Persist the entire /root home so that both ~/.claude.json (auth tokens +
+      # Persist the entire /home/claude so that ~/.claude.json (auth tokens +
       # user-scope MCP config) and ~/.claude/ (session data) survive restarts.
       # Log in once with: docker exec -it claude-runner claude auth
-      - claude-home:/root
+      - claude-home:/home/claude
     depends_on:
       - anythingllm
 

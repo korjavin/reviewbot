@@ -66,10 +66,10 @@ The **Health Check (optional)** node is disconnected. Right-click it → **Execu
 ### Enter the container
 
 ```bash
-docker exec -it claude-runner bash
+docker exec -it -u claude claude-runner bash
 ```
 
-You land in a Debian environment with:
+You land in a Debian environment as the `claude` user (`/home/claude`) with:
 - `claude` CLI (from `@anthropic-ai/claude-code`)
 - `anythingllm-mcp-server` (global npm package)
 - `git`
@@ -88,7 +88,7 @@ claude auth
 # Follow the URL printed in the terminal on your laptop.
 ```
 
-Auth is persisted in the `claude-auth` Docker volume mounted at `/root/.claude`.
+Auth is persisted in the `claude-auth` Docker volume mounted at `/home/claude`.
 You only need to do this **once**.
 
 ### Verify Claude works
@@ -101,7 +101,7 @@ claude -p "What is 2+2?" --dangerously-skip-permissions
 
 ### Check the MCP config
 
-On startup `claude-runner` seeds `~/.claude/settings.json` with the AnythingLLM MCP config:
+On startup `claude-runner` seeds `~/.claude.json` (i.e. `/home/claude/.claude.json`) with the AnythingLLM MCP config:
 
 ```bash
 cat ~/.claude/settings.json
