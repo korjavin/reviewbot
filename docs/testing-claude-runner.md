@@ -70,7 +70,7 @@ docker exec -it -u claude claude-runner bash
 ```
 
 You land in a Debian environment as the `claude` user (`/home/claude`) with:
-- `claude` CLI (from `@anthropic-ai/claude-code`, installed in `/app/.local/bin`)
+- `claude` CLI (from `@anthropic-ai/claude-code`, installed in `/app/bin`)
 - `anythingllm-mcp-server` (global npm package, installed in `/app/.npm-global/bin`)
 - `git`
 

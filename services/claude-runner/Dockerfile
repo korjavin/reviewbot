@@ -31,13 +31,17 @@ USER claude
 
 # Set npm to install globally into /app/.npm-global
 ENV NPM_CONFIG_PREFIX=/app/.npm-global
-ENV PATH="/app/.npm-global/bin:/app/.local/bin:$PATH"
+ENV PATH="/app/.npm-global/bin:/app/bin:$PATH"
 
 # Install anythingllm-mcp-server into /app/.npm-global
-# Also temporarily set HOME=/app so the Claude Code installer script
-# places the `claude` binary in `/app/.local/bin/claude` rather than `/home/claude`.
+# The native Claude install script ignores $HOME and installs to the user's
+# true home dir (/home/claude/.local/bin/claude). Since that directory is
+# shadowed by our docker-compose volume, we explicitly move the binary
+# out of the home dir and into /app/bin.
 RUN npm install -g anythingllm-mcp-server \
-    && HOME=/app curl -fsSL https://claude.ai/install.sh | bash
+    && curl -fsSL https://claude.ai/install.sh | bash \
+    && mkdir -p /app/bin \
+    && mv /home/claude/.local/bin/claude /app/bin/claude
 
 COPY --from=builder /build/claude-runner /usr/local/bin/claude-runner
 
