@@ -88,10 +88,15 @@ services:
       - STORAGE_DIR=/app/server/storage
       - UID=1000
       - GID=1000
-      # LLM backend - configure in AnythingLLM UI or via env
-      # e.g. use OpenAI-compatible endpoint or Ollama
-      # - LLM_PROVIDER=openai
-      # - OPEN_AI_KEY=${LLM_API_KEY}
+      # LLM backend configuration
+      # AnythingLLM requires specific provider and key variables
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      # If LLM_PROVIDER=gemini, it reads GEMINI_API_KEY
+      - GEMINI_API_KEY=${LLM_API_KEY}
+      # If LLM_PROVIDER=anthropic, it reads ANTHROPIC_API_KEY
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # If LLM_PROVIDER=openai, it reads OPEN_AI_KEY
+      - OPEN_AI_KEY=${LLM_API_KEY}
     volumes:
       - anythingllm-data:/app/server/storage
       # Intel markdown files from host — visible in AnythingLLM as "hot dir"
