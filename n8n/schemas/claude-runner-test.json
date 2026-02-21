@@ -92,14 +92,8 @@
                 },
                 "sendBody": true,
                 "contentType": "json",
-                "body": {
-                    "clone_url": "={{ $json.clone_url }}",
-                    "github_token": "={{ $json.github_token }}",
-                    "owner": "={{ $json.owner }}",
-                    "repo": "={{ $json.repo }}",
-                    "pr_number": "={{ $json.pr_number }}",
-                    "prompt": "={{ $json.prompt }}"
-                },
+                "specifyBody": "json",
+                "jsonBody": "={\n  \"clone_url\": {{ JSON.stringify($json.clone_url) }},\n  \"github_token\": {{ JSON.stringify($json.github_token) }},\n  \"owner\": {{ JSON.stringify($json.owner) }},\n  \"repo\": {{ JSON.stringify($json.repo) }},\n  \"pr_number\": {{ $json.pr_number }},\n  \"prompt\": {{ JSON.stringify($json.prompt) }}\n}",
                 "options": {
                     "timeout": 660000,
                     "response": {
