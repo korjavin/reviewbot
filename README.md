@@ -1,131 +1,157 @@
-# ReviewBot - GitHub App for Automated Interactions
+# ReviewBot
 
-ReviewBot is a GitHub App designed to automate interactions with pull requests and issues. It demonstrates how to handle webhooks, authenticate as a GitHub App, and use the GitHub API to perform actions like commenting, reacting, and creating pull requests.
+> **AI-powered security review pipeline for GitHub repositories.**
 
-## Features
+ReviewBot analyses any GitHub repository for security vulnerabilities, spawns focused AI agents to review the code against a curated knowledge base of security intel, generates lightweight CI checks for confirmed findings, and opens a Pull Request with those checks in the target repo.
 
-- **Ping Event**: Responds to GitHub App ping events to verify connectivity.
-- **Issue Comments**:
-  - Detects comments containing `@reviewbot` (ignores bot comments).
-  - Reacts with an "eyes" (👀) emoji.
-  - Replies with a "Pong!" message quoting a snippet of the original comment.
-- **Pull Request Automation**:
-  - Automatically triggered when a new Pull Request is opened (ignores bot PRs).
-  - Clones the repository to a temporary directory.
-  - Creates a new branch (`reviewbot/review-pr-{prNumber}`).
-  - Adds a timestamped file (`YYYY-MM-DD.txt`) to the branch.
-  - Commits and pushes the new branch.
-  - Opens a **new** Pull Request from this branch targeting the default branch.
-  - Comments on the **original** Pull Request with a link to the newly created review PR.
+Subsequent commits run only the **lightweight generated checks** — the expensive AI pipeline is only invoked again on explicit re-review.
 
-## Architecture
+---
 
-The application is written in Go and uses the following key components:
-- **Web Server**: Standard library `net/http` server.
-- **GitHub API Client**: `google/go-github` for API interactions.
-- **Authentication**: `bradleyfalzon/ghinstallation` handles JWT creation and installation token management.
-- **Git Operations**: Uses `os/exec` to run `git` commands for cloning, committing, and pushing.
+## How it works
 
-## Prerequisites
+```
+PR opened / manual trigger
+        │
+        ▼
+1.  Checkout target repository
+        │
+        ▼
+2.  Profiler Agent — "what services, frameworks, attack surfaces are here?"
+        │
+        ▼
+3.  Knowledge Base lookup (parallel per topic)
+        │
+        ▼
+4.  Review Agents (parallel, one per intel document)
+    "Is this vulnerability present? Evidence?"
+        │
+        ▼
+5.  Check Generator — produces GitHub Actions YAML for confirmed findings
+        │
+        ▼
+6.  PR opened in target repo with generated CI/CD checks
+```
 
-- **Go**: Version 1.25 or higher.
-- **Docker**: Optional, for containerized deployment.
-- **Git**: Installed and available in the system PATH (required for PR automation).
+---
 
-## Configuration
+## Key Components
 
-ReviewBot is configured via environment variables. Create a `.env` file (see `.env.example`) or set these variables in your environment.
+| Component | Role | Tech |
+|-----------|------|------|
+| **github-app** | Receives webhooks, authenticates as GitHub App, opens PRs | Go |
+| **n8n** | Orchestrates the multi-step review pipeline | n8n (self-hosted) |
+| **AnythingLLM** | Knowledge base — document storage, embeddings, hybrid search | AnythingLLM (self-hosted) |
+| **kb-maintainer** | Watches `intels/` and keeps AnythingLLM in sync automatically | Go |
+| **Agent containers** | Run Gemini / Claude with a job and POST results back asynchronously | Docker |
+| **mcp-anythingllm** | MCP server inside agent containers — gives agents native KB access | Go |
+
+→ Full details in [ARCHITECTURE.md](ARCHITECTURE.md)
+
+---
+
+## Repository Layout
+
+```
+reviewbot/
+├── main.go
+├── ARCHITECTURE.md          ← system design & diagrams
+├── docker-compose.yml       ← n8n + AnythingLLM services
+├── intels/                  ← security intel documents (*.md)
+│
+├── internal/
+│   ├── config/
+│   ├── github/              ← webhook handler + API client
+│   ├── handler/             ← event handlers
+│   ├── git/                 ← git helpers
+│   ├── middleware/
+│   └── oauth/
+│
+├── pkg/
+│   ├── knowledgebase/       ← KB client library
+│   └── pipeline/            ← pipeline types & interfaces
+│
+├── services/
+│   └── kb-maintainer/       ← syncs intels/ → AnythingLLM
+│
+├── n8n/
+│   ├── schemas/             ← n8n workflow definitions
+│   └── nodes/               ← custom n8n nodes
+│
+└── docs/
+    └── knowledgebase/
+    └── pipeline/
+```
+
+---
+
+## Running Locally
+
+### Prerequisites
+
+- Go 1.21+
+- Docker & Docker Compose
+- Git
+
+### 1. Start infrastructure services
+
+```bash
+docker-compose up -d
+```
+
+This starts **n8n** (pipeline orchestrator) and **AnythingLLM** (knowledge base).
+
+### 2. Configure
+
+Copy `.env.example` to `.env` and fill in:
 
 | Variable | Required | Description |
-|---|---|---|
-| `GITHUB_APP_ID` | Yes | The ID of your GitHub App. |
-| `GITHUB_PRIVATE_KEY_PATH` | Yes* | Path to the private key PEM file. |
-| `GITHUB_PRIVATE_KEY` | Yes* | Raw content of the private key PEM (alternative to path). |
-| `GITHUB_WEBHOOK_SECRET` | Yes | The secret used to secure webhooks. |
-| `GITHUB_CLIENT_ID` | No | OAuth Client ID (if using OAuth flow). |
-| `GITHUB_CLIENT_SECRET` | No | OAuth Client Secret (if using OAuth flow). |
-| `PORT` | No | Server port (default: 8080). |
-| `BASE_URL` | No | Public URL for OAuth redirects. |
+|----------|----------|-------------|
+| `GITHUB_APP_ID` | ✓ | GitHub App ID |
+| `GITHUB_PRIVATE_KEY_PATH` | ✓* | Path to PEM private key |
+| `GITHUB_PRIVATE_KEY` | ✓* | Raw PEM content (alternative) |
+| `GITHUB_WEBHOOK_SECRET` | ✓ | Webhook secret |
+| `PORT` | — | Server port (default: `8080`) |
 
-\* *One of `GITHUB_PRIVATE_KEY_PATH` or `GITHUB_PRIVATE_KEY` must be provided.*
+*One of `GITHUB_PRIVATE_KEY_PATH` or `GITHUB_PRIVATE_KEY` required.*
 
-## Installation & Running
+### 3. Run the bot
 
-### Local Development
+```bash
+go run main.go
+```
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/korjavin/reviewbot.git
-    cd reviewbot
-    ```
+For local webhook testing, proxy with [smee.io](https://smee.io) or ngrok:
 
-2.  **Install dependencies:**
-    ```bash
-    go mod download
-    ```
+```bash
+smee -u https://smee.io/your-channel -t http://localhost:8080/webhook
+```
 
-3.  **Run the application:**
-    ```bash
-    # Set environment variables first or use a .env loader
-    export GITHUB_APP_ID=...
-    export GITHUB_PRIVATE_KEY_PATH=...
-    export GITHUB_WEBHOOK_SECRET=...
+---
 
-    go run main.go
-    ```
+## GitHub App Permissions
 
-### Docker
+| Permission | Level |
+|------------|-------|
+| Contents | Read & Write |
+| Issues | Read & Write |
+| Pull Requests | Read & Write |
+| Metadata | Read |
 
-1.  **Build and run with Docker Compose:**
-    ```bash
-    docker-compose up --build
-    ```
-    Ensure your `.env` file is present in the root directory.
+Subscribe to events: **Pull request**, **Issue comment**.
 
-## GitHub App Setup
-
-To use ReviewBot, you must register a GitHub App with the following permissions and events:
-
-### Repository Permissions
-- **Contents**: Read & Write (to commit and push changes).
-- **Issues**: Read & Write (to comment on issues/PRs).
-- **Pull Requests**: Read & Write (to create and comment on PRs).
-- **Metadata**: Read-only (mandatory).
-
-### Subscribe to Events
-- **Pull request**: To trigger on opened PRs.
-- **Issue comment**: To trigger on `@reviewbot` mentions.
-
-### Webhook URL
-Set the Webhook URL to your public endpoint (e.g., `https://your-domain.com/webhook`). For local development, use a proxy like Smee or Ngrok.
-
-## Development
-
-To test webhooks locally:
-
-1.  **Using Smee.io**:
-    - Create a channel on [smee.io](https://smee.io).
-    - Install the client: `npm install --global smee-client`.
-    - Run the client: `smee -u https://smee.io/your-channel -t http://localhost:8080/webhook`.
-
-2.  **Using Ngrok**:
-    - Run `ngrok http 8080`.
-    - Use the generated HTTPS URL as your GitHub App's Webhook URL.
+---
 
 ## Testing
-
-Run the test suite using standard Go tooling:
 
 ```bash
 go test ./...
 ```
 
-## Project Structure
+---
 
-- `main.go`: Application entry point and server setup.
-- `internal/config/`: Configuration loading and validation.
-- `internal/github/`: GitHub client factory and webhook handler logic.
-- `internal/handler/`: Event handlers for Ping, Issue Comment, and Pull Request events.
-- `internal/git/`: Helper functions for executing Git commands.
-- `internal/middleware/`: HTTP middleware (e.g., logging).
-- `internal/oauth/`: OAuth callback handler.
+## Intel Documents
+
+Security intelligence lives in `intels/*.md` — tagged, categorized markdown documents covering vulnerability classes. `kb-maintainer` watches this directory and syncs changes to AnythingLLM automatically.
+
+To add new intel: drop a `.md` file into `intels/` and commit. It will be indexed within seconds.
