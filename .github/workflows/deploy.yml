@@ -26,13 +26,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image
+      # ── reviewbot ────────────────────────────────────────────────────────
+      - name: Build and push reviewbot image
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.sha }}
 
+      # ── kb-maintainer ────────────────────────────────────────────────────
+      - name: Build and push kb-maintainer image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./services/kb-maintainer
+          file: ./services/kb-maintainer/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ github.event.repository.name }}-kb-maintainer:${{ github.sha }}
+
+      # ── deploy branch ────────────────────────────────────────────────────
       - name: Update deploy branch
         env:
           GITHUB_COMMIT_SHA: ${{ github.sha }}
@@ -42,7 +54,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -B deploy
-          sed -i "s|image: ghcr.io/.*/.*:.*|image: ghcr.io/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}:${GITHUB_COMMIT_SHA}|" docker-compose.yml
+
+          # Update reviewbot image tag (exact service name to avoid greedy match)
+          sed -i "s|image: ghcr.io/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}:.*|image: ghcr.io/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}:${GITHUB_COMMIT_SHA}|" docker-compose.yml
+
+          # Update kb-maintainer image tag
+          sed -i "s|image: ghcr.io/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}-kb-maintainer:.*|image: ghcr.io/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}-kb-maintainer:${GITHUB_COMMIT_SHA}|" docker-compose.yml
+
           git add docker-compose.yml
           git commit -m "deploy: ${GITHUB_COMMIT_SHA}"
           git push --force origin deploy

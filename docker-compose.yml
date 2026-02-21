@@ -93,9 +93,33 @@ services:
       # Upload to workspace via API: POST /api/v1/document/upload
       - ${INTELS_DIR:-./intels}:/app/server/storage/hotdir:ro
 
+  # ──────────────────────────────────────────────
+  # KB Maintainer — keeps ./intels in sync with
+  # the AnythingLLM workspace via REST API
+  # ──────────────────────────────────────────────
+  kb-maintainer:
+    image: ghcr.io/korjavin/reviewbot-kb-maintainer:latest
+    container_name: kb-maintainer
+    restart: unless-stopped
+    networks:
+      - traefik_network
+    environment:
+      - ANYTHINGLLM_URL=http://anythingllm:3001
+      - ANYTHINGLLM_API_KEY=${ANYTHINGLLM_API_KEY}
+      - ANYTHINGLLM_WORKSPACE=${ANYTHINGLLM_WORKSPACE:-intels}
+      - INTELS_DIR=/intels
+      - STATE_PATH=/state/kb-maintainer.json
+      - SYNC_INTERVAL=${KB_SYNC_INTERVAL:-5m}
+    volumes:
+      - ${INTELS_DIR:-./intels}:/intels:ro
+      - kb-maintainer-state:/state
+    depends_on:
+      - anythingllm
+
 volumes:
   n8n-data:
   anythingllm-data:
+  kb-maintainer-state:
 
 networks:
   traefik_network:

@@ -32,6 +32,17 @@ internal/handler/ping.go    — ping event handler
 internal/handler/pullrequest.go — PR opened → comment
 internal/handler/comment.go — issue comment with @reviewbot → reply + reaction
 internal/oauth/oauth.go     — OAuth callback for app installation
+
+services/kb-maintainer/     — KB Maintainer microservice (separate Go module)
+  main.go                   — entry point: watcher + ticker + signal handler
+  config.go                 — env-var config
+  client.go                 — AnythingLLM REST API client
+  sync.go                   — SyncFile / DeleteFile / FullSync
+  state.go                  — JSON state persistence + MD5 hashing
+  Dockerfile                — multi-stage build, non-root user
+
+intels/                     — markdown intel files (watched by kb-maintainer)
+docs/kb-maintainer/DESIGN.md — design doc for the KB Maintainer service
 ```
 
 ## Endpoints
@@ -54,6 +65,17 @@ internal/oauth/oauth.go     — OAuth callback for app installation
 | `BASE_URL` | no | Public URL for OAuth redirects |
 
 *One of `GITHUB_PRIVATE_KEY_PATH` or `GITHUB_PRIVATE_KEY` is required.
+
+### KB Maintainer (`services/kb-maintainer`)
+
+| Variable | Required | Description |
+|---|---|---|
+| `ANYTHINGLLM_URL` | no | AnythingLLM base URL (default: `http://anythingllm:3001`) |
+| `ANYTHINGLLM_API_KEY` | yes | Bearer token from AnythingLLM Settings → API Keys |
+| `ANYTHINGLLM_WORKSPACE` | no | Workspace slug (default: `intels`, created if absent) |
+| `INTELS_DIR` | no | Directory to watch (default: `/intels`) |
+| `STATE_PATH` | no | Persistent sync state file (default: `/state/kb-maintainer.json`) |
+| `SYNC_INTERVAL` | no | Periodic full-resync interval (default: `5m`) |
 
 ## Local Development
 
