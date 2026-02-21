@@ -148,7 +148,53 @@ taxonomy: security/ci-cd/github-actions
 
 ---
 
-## 9. Limitations & Future Work
+## 9. Adding Intel Files in Production (Portainer + Podman)
+
+The `/intels` mount inside the container is **read-only**. New files must be
+written on the **host** side of the bind mount.
+
+### Find the host path
+
+```bash
+podman inspect kb-maintainer \
+  --format '{{range .Mounts}}{{if eq .Destination "/intels"}}{{.Source}}{{end}}{{end}}'
+```
+
+This prints the real host path (e.g. `/data/compose/7/intels`).
+
+### Write a new intel file
+
+```bash
+INTELS=$(podman inspect kb-maintainer \
+  --format '{{range .Mounts}}{{if eq .Destination "/intels"}}{{.Source}}{{end}}{{end}}')
+
+cat > $INTELS/my-new-intel.md << 'EOF'
+---
+title: My New Intel
+severity: high
+tags: [example]
+---
+# My New Intel
+...
+EOF
+```
+
+kb-maintainer picks up the new file via inotify within milliseconds.  Check:
+
+```bash
+podman logs -f kb-maintainer
+```
+
+### Recommended: pin the host path
+
+To avoid hunting for the Portainer-generated path, set `INTELS_DIR` to a fixed
+absolute path in your stack env vars (e.g. `INTELS_DIR=/opt/reviewbot/intels`),
+create the directory on the host, and redeploy. The path is then predictable
+across redeployments.
+
+---
+
+## 10. Limitations & Future Work
 
 - Only top-level `.md` files in `INTELS_DIR` are watched (no subdirectory recursion).
 - Documents are never deleted from the AnythingLLM document store; they are only

@@ -77,6 +77,32 @@ docs/kb-maintainer/DESIGN.md — design doc for the KB Maintainer service
 | `STATE_PATH` | no | Persistent sync state file (default: `/state/kb-maintainer.json`) |
 | `SYNC_INTERVAL` | no | Periodic full-resync interval (default: `5m`) |
 
+## Adding Intel Files (Portainer + Podman)
+
+`/intels` inside the container is read-only. Write files on the host:
+
+```bash
+# Find the real host path
+INTELS=$(podman inspect kb-maintainer \
+  --format '{{range .Mounts}}{{if eq .Destination "/intels"}}{{.Source}}{{end}}{{end}}')
+
+# Drop a new file — kb-maintainer picks it up via inotify
+cat > $INTELS/my-intel.md << 'EOF'
+---
+title: ...
+severity: high
+tags: [example]
+---
+# ...
+EOF
+
+# Watch it sync
+podman logs -f kb-maintainer
+```
+
+Tip: set `INTELS_DIR=/opt/reviewbot/intels` in Portainer stack env vars to pin
+the host path instead of relying on the auto-generated Portainer compose path.
+
 ## Local Development
 
 Use [smee.io](https://smee.io) or [ngrok](https://ngrok.com) to proxy webhooks to localhost:
