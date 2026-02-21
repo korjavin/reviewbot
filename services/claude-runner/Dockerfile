@@ -24,16 +24,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # when running as root, so all claude operations must run as a normal user.
 RUN useradd -m -u 1000 -s /bin/bash claude
 
-# Install anythingllm-mcp-server and Claude Code CLI as the claude user
-# so the binaries land in /home/claude/.local/bin (where the installer puts them).
+# Switch to the claude user for all subsequent steps.
+# Set npm prefix to user-local dir so `npm install -g` doesn't need root.
 USER claude
+ENV NPM_CONFIG_PREFIX=/home/claude/.npm-global
+ENV PATH="/home/claude/.npm-global/bin:/home/claude/.local/bin:$PATH"
+
+# Install anythingllm-mcp-server (goes to ~/.npm-global/bin) and Claude Code CLI
+# (native installer puts binary at ~/.local/bin/claude).
 RUN npm install -g anythingllm-mcp-server \
     && curl -fsSL https://claude.ai/install.sh | bash
 
-# Add the claude user's local bin to PATH.
-ENV PATH="/home/claude/.local/bin:$PATH"
-
-# The Go binary needs to run as claude too (it spawns claude and writes ~/.claude.json).
 COPY --from=builder /build/claude-runner /usr/local/bin/claude-runner
 
 EXPOSE 8080
