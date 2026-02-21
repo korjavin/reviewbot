@@ -118,7 +118,7 @@ func handleReview(w http.ResponseWriter, r *http.Request) {
 	// --dangerously-skip-permissions: required for headless use (no TTY to confirm tool calls).
 	cmdArgs := []string{"-p", prompt, "--dangerously-skip-permissions"}
 	slog.Debug("running claude", "args", cmdArgs, "dir", tmpDir)
-	claudeCmd := exec.CommandContext(ctx, "claude", cmdArgs...)
+	claudeCmd := exec.CommandContext(ctx, "/home/claude/.local/bin/claude", cmdArgs...)
 	claudeCmd.Dir = tmpDir
 	// Prevent update checks and telemetry in headless mode.
 	claudeCmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
