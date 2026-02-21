@@ -44,6 +44,15 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ github.event.repository.name }}-kb-maintainer:${{ github.sha }}
 
+      # ── claude-runner ─────────────────────────────────────────────────────
+      - name: Build and push claude-runner image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./services/claude-runner
+          file: ./services/claude-runner/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ github.event.repository.name }}-claude-runner:${{ github.sha }}
+
       # ── deploy branch ────────────────────────────────────────────────────
       - name: Update deploy branch
         env:
@@ -60,6 +69,9 @@ jobs:
 
           # Update kb-maintainer image tag
           sed -i "s|image: ghcr.io/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}-kb-maintainer:.*|image: ghcr.io/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}-kb-maintainer:${GITHUB_COMMIT_SHA}|" docker-compose.yml
+
+          # Update claude-runner image tag
+          sed -i "s|image: ghcr.io/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}-claude-runner:.*|image: ghcr.io/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}-claude-runner:${GITHUB_COMMIT_SHA}|" docker-compose.yml
 
           git add docker-compose.yml
           git commit -m "deploy: ${GITHUB_COMMIT_SHA}"

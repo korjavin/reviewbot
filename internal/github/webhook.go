@@ -43,7 +43,7 @@ func NewWebhookHandler(cfg *config.Config) http.HandlerFunc {
 		case *gh.PullRequestEvent:
 			go handler.HandlePullRequest(newClient, newTransport, e)
 		case *gh.IssueCommentEvent:
-			go handler.HandleIssueComment(newClient, e)
+			go handler.HandleIssueComment(newClient, newTransport, cfg.N8NWebhookURL, e)
 		default:
 			log.Printf("Unhandled event type: %s", eventType)
 		}

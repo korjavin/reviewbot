@@ -8,14 +8,17 @@ import (
 )
 
 type Config struct {
-	AppID            int64
-	PrivateKeyPath   string
-	PrivateKey       string // raw PEM contents (alternative to path)
-	WebhookSecret    string
-	ClientID         string
-	ClientSecret     string
-	Port             string
-	BaseURL          string
+	AppID          int64
+	PrivateKeyPath string
+	PrivateKey     string // raw PEM contents (alternative to path)
+	WebhookSecret  string
+	ClientID       string
+	ClientSecret   string
+	Port           string
+	BaseURL        string
+	// N8NWebhookURL is the n8n webhook endpoint that receives review jobs.
+	// When set, @reviewbot mentions are forwarded there instead of replying inline.
+	N8NWebhookURL string
 }
 
 func Load() (*Config, error) {
@@ -59,6 +62,7 @@ func Load() (*Config, error) {
 		ClientSecret:   os.Getenv("GITHUB_CLIENT_SECRET"),
 		Port:           port,
 		BaseURL:        os.Getenv("BASE_URL"),
+		N8NWebhookURL:  os.Getenv("N8N_WEBHOOK_URL"),
 	}, nil
 }
 

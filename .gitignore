@@ -1,3 +1,5 @@
 .env
 *.pem
 reviewbot
+services/claude-runner/claude-runner
+services/kb-maintainer/kb-maintainer
