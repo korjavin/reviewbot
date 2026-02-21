@@ -6,7 +6,32 @@ This directory contains versioned n8n workflow definitions that can be imported 
 
 | File | Description |
 |------|-------------|
-| [`poc-review-pipeline.json`](./poc-review-pipeline.json) | POC end-to-end review pipeline |
+| [`poc-review-pipeline.json`](./poc-review-pipeline.json) | POC end-to-end review pipeline (Gemini via HTTP) |
+| [`claude-runner-test.json`](./claude-runner-test.json) | Manual test workflow — calls claude-runner service |
+
+---
+
+## `claude-runner-test.json`
+
+**Manual test workflow — 5 nodes:**
+
+```
+Manual Trigger → Test Parameters → Call Claude Runner → Format Result → Review Output
+```
+
+### Purpose
+
+Test the `claude-runner` container (the Go HTTP service that runs `claude` + AnythingLLM MCP).
+No GitHub webhook needed — trigger from the n8n UI directly.
+
+### How to use
+
+1. Import the file into n8n
+2. Open **Test Parameters** node and set `owner`, `repo`, `pr_number`, `github_token`, `clone_url`
+3. Click **Execute Workflow**
+4. Check **Format Result** output for the review markdown
+
+See [`docs/testing-claude-runner.md`](../../docs/testing-claude-runner.md) for full instructions including `docker exec` and MCP validation.
 
 ---
 

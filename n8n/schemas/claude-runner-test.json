@@ -1,0 +1,223 @@
+{
+    "name": "ReviewBot — Claude-Runner Test",
+    "nodes": [
+        {
+            "id": "node-manual-trigger",
+            "name": "Manual Trigger",
+            "type": "n8n-nodes-base.manualTrigger",
+            "typeVersion": 1,
+            "position": [
+                200,
+                300
+            ],
+            "parameters": {},
+            "notes": "Run this manually from the n8n UI to fire a test review.\nEdit the 'Test Parameters' node below to set repo/PR details."
+        },
+        {
+            "id": "node-test-params",
+            "name": "Test Parameters",
+            "type": "n8n-nodes-base.set",
+            "typeVersion": 3.4,
+            "position": [
+                440,
+                300
+            ],
+            "parameters": {
+                "mode": "manual",
+                "duplicateItem": false,
+                "assignments": {
+                    "assignments": [
+                        {
+                            "id": "param-owner",
+                            "name": "owner",
+                            "value": "korjavin",
+                            "type": "string"
+                        },
+                        {
+                            "id": "param-repo",
+                            "name": "repo",
+                            "value": "reviewbot",
+                            "type": "string"
+                        },
+                        {
+                            "id": "param-pr",
+                            "name": "pr_number",
+                            "value": 1,
+                            "type": "number"
+                        },
+                        {
+                            "id": "param-token",
+                            "name": "github_token",
+                            "value": "={{ $env.GITHUB_TEST_TOKEN }}",
+                            "type": "string"
+                        },
+                        {
+                            "id": "param-clone-url",
+                            "name": "clone_url",
+                            "value": "https://github.com/korjavin/reviewbot.git",
+                            "type": "string"
+                        },
+                        {
+                            "id": "param-prompt",
+                            "name": "prompt",
+                            "value": "Review this codebase for security issues and code quality problems. Use the AnythingLLM MCP tools to check the knowledge base for relevant vulnerability patterns. Output a concise markdown summary.",
+                            "type": "string"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "notes": "✏️  EDIT THIS NODE to set your test parameters:\n- owner / repo: GitHub repo to clone and review\n- pr_number: PR number (used in the prompt only, not fetched)\n- github_token: personal access token or set GITHUB_TEST_TOKEN env var in n8n\n- clone_url: full HTTPS clone URL\n- prompt: optional custom prompt (leave empty for default)"
+        },
+        {
+            "id": "node-call-claude-runner",
+            "name": "Call Claude Runner",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                700,
+                300
+            ],
+            "parameters": {
+                "method": "POST",
+                "url": "http://claude-runner:8080/review",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "Content-Type",
+                            "value": "application/json"
+                        }
+                    ]
+                },
+                "sendBody": true,
+                "contentType": "json",
+                "body": {
+                    "clone_url": "={{ $json.clone_url }}",
+                    "github_token": "={{ $json.github_token }}",
+                    "owner": "={{ $json.owner }}",
+                    "repo": "={{ $json.repo }}",
+                    "pr_number": "={{ $json.pr_number }}",
+                    "prompt": "={{ $json.prompt }}"
+                },
+                "options": {
+                    "timeout": 660000,
+                    "response": {
+                        "response": {
+                            "fullResponse": false
+                        }
+                    }
+                }
+            },
+            "notes": "Calls claude-runner POST /review.\nTimeout is 11 min (claude can take ~10 min on large repos).\nclaude-runner is on the same Docker network — internal URL used."
+        },
+        {
+            "id": "node-check-health",
+            "name": "Health Check (optional)",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                440,
+                520
+            ],
+            "parameters": {
+                "method": "GET",
+                "url": "http://claude-runner:8080/health",
+                "options": {
+                    "timeout": 5000
+                }
+            },
+            "notes": "Optional: run this standalone node to confirm claude-runner is up.\nRight-click → Execute node."
+        },
+        {
+            "id": "node-format-result",
+            "name": "Format Result",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                960,
+                300
+            ],
+            "parameters": {
+                "jsCode": "const response = $input.first().json;\n\n// claude-runner returns { review: \"...markdown...\" }\nconst review = response.review ?? JSON.stringify(response, null, 2);\n\nconst lines = review.split('\\n');\nconst preview = lines.slice(0, 20).join('\\n') + (lines.length > 20 ? '\\n\\n[...truncated, full review below...]' : '');\n\nreturn [{\n  json: {\n    review,\n    preview,\n    char_count: review.length,\n    line_count: lines.length,\n    status: 'success'\n  }\n}];"
+            },
+            "notes": "Extracts the review text.\nFull review in 'review' field, 20-line preview in 'preview'."
+        },
+        {
+            "id": "node-output",
+            "name": "Review Output",
+            "type": "n8n-nodes-base.noOp",
+            "typeVersion": 1,
+            "position": [
+                1200,
+                300
+            ],
+            "parameters": {},
+            "notes": "✅ Execution ends here.\nOpen 'Format Result' node output to read the full review.\nThe 'review' field contains the raw markdown from Claude."
+        }
+    ],
+    "connections": {
+        "Manual Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Test Parameters",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Test Parameters": {
+            "main": [
+                [
+                    {
+                        "node": "Call Claude Runner",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Call Claude Runner": {
+            "main": [
+                [
+                    {
+                        "node": "Format Result",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Format Result": {
+            "main": [
+                [
+                    {
+                        "node": "Review Output",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1",
+        "saveManualExecutions": true,
+        "callerPolicy": "workflowsFromSameOwner",
+        "errorWorkflow": ""
+    },
+    "staticData": null,
+    "tags": [
+        "reviewbot",
+        "test",
+        "claude-runner"
+    ],
+    "meta": {
+        "templateId": "reviewbot-claude-runner-test-v1",
+        "templateCredsSetupCompleted": false,
+        "instanceId": ""
+    },
+    "pinData": {}
+}
