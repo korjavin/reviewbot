@@ -33,7 +33,7 @@ type ReviewResponse struct {
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: slog.LevelDebug,
 	})))
 
 	// Seed ~/.claude.json with MCP config on first run.
@@ -87,37 +87,51 @@ func handleReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer os.RemoveAll(tmpDir)
+	slog.Debug("temp dir created", "dir", tmpDir)
 
 	// Clone the repo with a shallow depth to keep it fast.
 	cloneURL := fmt.Sprintf("https://x-access-token:%s@github.com/%s/%s.git",
 		req.GitHubToken, req.Owner, req.Repo)
+	cloneURLSafe := fmt.Sprintf("https://x-access-token:***@github.com/%s/%s.git", req.Owner, req.Repo)
+	slog.Debug("cloning repo", "url", cloneURLSafe, "dir", tmpDir)
 	gitCmd := exec.Command("git", "clone", "--depth=1", cloneURL, ".")
 	gitCmd.Dir = tmpDir
 	if out, err := gitCmd.CombinedOutput(); err != nil {
 		sanitized := strings.ReplaceAll(string(out), req.GitHubToken, "***")
-		slog.Error("git clone failed", "output", sanitized)
+		slog.Error("git clone failed", "output", sanitized, "err", err)
 		http.Error(w, "clone failed", http.StatusInternalServerError)
 		return
+	} else {
+		slog.Debug("git clone succeeded", "output", strings.ReplaceAll(string(out), req.GitHubToken, "***"))
 	}
 
 	prompt := req.Prompt
 	if prompt == "" {
 		prompt = buildPrompt(req.Owner, req.Repo, req.PRNumber)
 	}
+	slog.Debug("prompt", "text", prompt)
 
 	ctx, cancel := context.WithTimeout(r.Context(), defaultReviewTimeout)
 	defer cancel()
 
 	// Run claude in non-interactive print mode.
 	// --dangerously-skip-permissions: required for headless use (no TTY to confirm tool calls).
-	claudeCmd := exec.CommandContext(ctx, "claude", "-p", prompt, "--dangerously-skip-permissions")
+	cmdArgs := []string{"-p", prompt, "--dangerously-skip-permissions"}
+	slog.Debug("running claude", "args", cmdArgs, "dir", tmpDir)
+	claudeCmd := exec.CommandContext(ctx, "claude", cmdArgs...)
 	claudeCmd.Dir = tmpDir
 	// Prevent update checks and telemetry in headless mode.
 	claudeCmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
 
-	out, err := claudeCmd.Output()
+	// CombinedOutput captures both stdout AND stderr — critical for seeing claude error messages.
+	out, err := claudeCmd.CombinedOutput()
 	if err != nil {
-		slog.Error("claude run failed", "err", err, "owner", req.Owner, "repo", req.Repo, "pr", req.PRNumber)
+		// Log the full output so we can see what claude actually complained about.
+		slog.Error("claude run failed",
+			"err", err,
+			"owner", req.Owner, "repo", req.Repo, "pr", req.PRNumber,
+			"output", string(out),
+		)
 		http.Error(w, "review failed", http.StatusInternalServerError)
 		return
 	}
@@ -126,6 +140,13 @@ func handleReview(w http.ResponseWriter, r *http.Request) {
 		"owner", req.Owner, "repo", req.Repo, "pr", req.PRNumber,
 		"review_bytes", len(out),
 	)
+	slog.Debug("review preview", "first_200_chars", func() string {
+		s := string(out)
+		if len(s) > 200 {
+			return s[:200] + "..."
+		}
+		return s
+	}())
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ReviewResponse{Review: string(out)})
