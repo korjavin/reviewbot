@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -123,8 +125,15 @@ func handleReview(w http.ResponseWriter, r *http.Request) {
 	// Prevent update checks and telemetry in headless mode.
 	claudeCmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
 
-	// CombinedOutput captures both stdout AND stderr — critical for seeing claude error messages.
-	out, err := claudeCmd.CombinedOutput()
+	// Wire Claude's output to both our buffer (to return to n8n) and standard out (for real-time docker logs)
+	var outBuf bytes.Buffer
+	multiWriter := io.MultiWriter(&outBuf, os.Stdout)
+	claudeCmd.Stdout = multiWriter
+	claudeCmd.Stderr = multiWriter
+
+	err = claudeCmd.Run()
+	out := outBuf.Bytes()
+
 	if err != nil {
 		// Log the full output so we can see what claude actually complained about.
 		slog.Error("claude run failed",
