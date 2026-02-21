@@ -135,7 +135,13 @@ func handleReview(w http.ResponseWriter, r *http.Request) {
 func buildPrompt(owner, repo string, prNumber int) string {
 	return fmt.Sprintf(`You are a code reviewer for GitHub repository %s/%s, reviewing PR #%d.
 
-First, use the AnythingLLM MCP server tools to query the knowledge base for relevant security guidelines, common vulnerability patterns, and code quality standards that apply to this type of codebase.
+IMPORTANT: Before using any AnythingLLM MCP tools, you MUST first call the
+initialize_anythingllm tool with no arguments — it will auto-configure from
+environment variables. Skip this step and all other anythingllm tools will fail.
+
+After initializing, use the AnythingLLM MCP server tools to query the knowledge
+base for relevant security guidelines, common vulnerability patterns, and code
+quality standards that apply to this type of codebase.
 
 Then review the code in the current directory. Examine the file structure and key source files. Focus on:
 1. Security vulnerabilities (injections, auth issues, data exposure, unsafe operations)
