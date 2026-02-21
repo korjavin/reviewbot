@@ -1,0 +1,243 @@
+{
+  "name": "ReviewBot — POC Review Pipeline",
+  "nodes": [
+    {
+      "id": "node-webhook",
+      "name": "PR Trigger (Webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "webhookId": "reviewbot-pipeline",
+      "parameters": {
+        "path": "reviewbot-pipeline",
+        "httpMethod": "POST",
+        "responseMode": "onReceived",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "notes": "Called by reviewbot Go service when a PR is opened.\nExpected body: { repoFullName, prNumber, ref, installationToken, repoUrl }"
+    },
+    {
+      "id": "node-extract",
+      "name": "Extract PR Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "parameters": {
+        "jsCode": "// Pull fields from the incoming webhook payload\nconst body = $input.first().json.body ?? $input.first().json;\n\nconst repoFullName    = body.repoFullName;     // e.g. 'octocat/Hello-World'\nconst prNumber        = body.prNumber;\nconst ref             = body.ref;              // commit SHA or branch\nconst repoUrl         = body.repoUrl;\nconst installationToken = body.installationToken; // short-lived GitHub App token\n\nif (!repoFullName || !prNumber) {\n  throw new Error('Missing required fields: repoFullName, prNumber');\n}\n\nreturn [{\n  json: { repoFullName, prNumber, ref, repoUrl, installationToken }\n}];"
+      }
+    },
+    {
+      "id": "node-anythingllm-query",
+      "name": "Query AnythingLLM KB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ANYTHINGLLM_URL }}/api/v1/workspace/{{ $env.ANYTHINGLLM_WORKSPACE ?? 'intels' }}/chat",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.ANYTHINGLLM_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "message": "=List the most relevant security vulnerabilities and CI/CD misconfigurations for a repository at {{ $json.repoUrl }}. Focus on GitHub Actions, Dockerfile, and Go service security.",
+          "mode": "query"
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "notes": "Query AnythingLLM workspace 'intels' for relevant knowledge.\nReturns: { textResponse, sources[] }"
+    },
+    {
+      "id": "node-prepare-prompt",
+      "name": "Prepare LLM Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300],
+      "parameters": {
+        "jsCode": "const pr = $('Extract PR Data').first().json;\nconst kbResponse = $input.first().json;\n\nconst intels = kbResponse.textResponse ?? 'No knowledge base results found.';\nconst sources = (kbResponse.sources ?? []).map(s => `- ${s.title}`).join('\\n') || 'none';\n\nconst systemPrompt = `You are a security-focused code review assistant.\nYou analyse GitHub pull requests and identify security vulnerabilities.\nYou have access to a curated knowledge base of known vulnerability patterns.\nAlways respond with structured JSON only.`;\n\nconst userPrompt = `Review the following pull request for security issues.\n\nRepository: ${pr.repoFullName}\nPR Number: #${pr.prNumber}\nRef: ${pr.ref}\n\n## Knowledge Base Context\n${intels}\n\n## Knowledge Base Sources\n${sources}\n\n## Task\nBased on the knowledge base context above, list potential security concerns for this repository.\nFor each concern:\n1. Name the vulnerability pattern\n2. Explain why it may apply to this repo\n3. Suggest a specific CI check to add\n\nRespond ONLY with valid JSON in this format:\n{\n  \"findings\": [\n    {\n      \"title\": \"string\",\n      \"severity\": \"critical|high|medium|low\",\n      \"description\": \"string\",\n      \"suggested_check\": \"string\"\n    }\n  ],\n  \"summary\": \"one-paragraph summary\"\n}`;\n\nreturn [{\n  json: {\n    ...pr,\n    systemPrompt,\n    userPrompt,\n    kbSources: sources\n  }\n}];"
+      }
+    },
+    {
+      "id": "node-llm-analysis",
+      "name": "LLM Security Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "key",
+              "value": "={{ $env.LLM_API_KEY }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "system_instruction": {
+            "parts": [
+              {
+                "text": "={{ $json.systemPrompt }}"
+              }
+            ]
+          },
+          "contents": [
+            {
+              "role": "user",
+              "parts": [
+                {
+                  "text": "={{ $json.userPrompt }}"
+                }
+              ]
+            }
+          ],
+          "generationConfig": {
+            "responseMimeType": "application/json",
+            "temperature": 0.2,
+            "maxOutputTokens": 2048
+          }
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "notes": "Calls Gemini 1.5 Flash via REST API.\nTo switch to OpenAI/Anthropic — replace URL + body format in this node."
+    },
+    {
+      "id": "node-parse-response",
+      "name": "Parse & Format Comment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, 300],
+      "parameters": {
+        "jsCode": "const pr = $('Prepare LLM Prompt').first().json;\nconst llmResponse = $input.first().json;\n\n// Extract text from Gemini response\nlet rawText = '';\ntry {\n  rawText = llmResponse.candidates[0].content.parts[0].text;\n} catch (e) {\n  throw new Error('Unexpected LLM response shape: ' + JSON.stringify(llmResponse));\n}\n\n// Parse JSON from response\nlet parsed;\ntry {\n  parsed = JSON.parse(rawText);\n} catch (e) {\n  // Fallback: treat as plain text\n  parsed = { findings: [], summary: rawText };\n}\n\nconst findings = parsed.findings ?? [];\nconst summary = parsed.summary ?? 'Analysis complete.';\n\n// Format GitHub PR comment as Markdown\nconst severityEmoji = { critical: '🔴', high: '🟠', medium: '🟡', low: '🟢' };\n\nlet findingsSection = findings.length > 0\n  ? findings.map(f => {\n      const emoji = severityEmoji[f.severity] ?? '⚪';\n      return [\n        `### ${emoji} ${f.title} (${f.severity})`,\n        f.description,\n        `**Suggested check:** \\`${f.suggested_check}\\``,\n      ].join('\\n');\n    }).join('\\n\\n')\n  : '_No specific findings. Good baseline security posture detected._';\n\nconst comment = [\n  '## 🤖 ReviewBot Security Analysis',\n  '',\n  summary,\n  '',\n  '---',\n  '',\n  '## Findings',\n  '',\n  findingsSection,\n  '',\n  '---',\n  '',\n  `<details><summary>📚 Knowledge Base Sources</summary>\\n\\n${pr.kbSources}\\n</details>`,\n  '',\n  `_Powered by [ReviewBot](https://github.com/korjavin/reviewbot) · ${new Date().toISOString()}_`,\n].join('\\n');\n\nreturn [{\n  json: {\n    repoFullName: pr.repoFullName,\n    prNumber: pr.prNumber,\n    installationToken: pr.installationToken,\n    comment,\n    findingsCount: findings.length\n  }\n}];"
+      }
+    },
+    {
+      "id": "node-post-comment",
+      "name": "Post GitHub PR Comment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1640, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.github.com/repos/{{ $json.repoFullName }}/issues/{{ $json.prNumber }}/comments",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.installationToken }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "X-GitHub-Api-Version",
+              "value": "2022-11-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "body": "={{ $json.comment }}"
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "notes": "Posts the formatted Markdown comment to the PR.\ninstallationToken is a short-lived GitHub App token supplied by the reviewbot Go service in the webhook payload."
+    },
+    {
+      "id": "node-respond",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1880, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, findingsCount: $('Parse & Format Comment').first().json.findingsCount }) }}"
+      }
+    }
+  ],
+  "connections": {
+    "PR Trigger (Webhook)": {
+      "main": [
+        [{ "node": "Extract PR Data", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract PR Data": {
+      "main": [
+        [{ "node": "Query AnythingLLM KB", "type": "main", "index": 0 }]
+      ]
+    },
+    "Query AnythingLLM KB": {
+      "main": [
+        [{ "node": "Prepare LLM Prompt", "type": "main", "index": 0 }]
+      ]
+    },
+    "Prepare LLM Prompt": {
+      "main": [
+        [{ "node": "LLM Security Analysis", "type": "main", "index": 0 }]
+      ]
+    },
+    "LLM Security Analysis": {
+      "main": [
+        [{ "node": "Parse & Format Comment", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse & Format Comment": {
+      "main": [
+        [{ "node": "Post GitHub PR Comment", "type": "main", "index": 0 }]
+      ]
+    },
+    "Post GitHub PR Comment": {
+      "main": [
+        [{ "node": "Respond OK", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": ["reviewbot", "poc", "security"],
+  "meta": {
+    "templateId": "reviewbot-poc-pipeline-v1",
+    "templateCredsSetupCompleted": false,
+    "instanceId": ""
+  },
+  "pinData": {}
+}
