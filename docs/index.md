@@ -1,24 +1,17 @@
 ---
 layout: default
-title: ReviewBot Architecture & Design
+title: ReviewBot — Building a Smarter Code Reviewer
 ---
 
-# ReviewBot: Intelligent Code Review with RAG Context
+# ReviewBot
 
-A GitHub App that performs intelligent security code reviews by maintaining knowledge bases and leveraging Claude/Gemini agents for deep context-aware analysis.
+We're building an automated security code reviewer powered by AI agents — designed to work across many repositories while getting smarter over time, not just blindly re-reading everything on each run.
 
-## Our Philosophy: Don't Reinvent, Reuse
-
-Instead of building custom solutions for common problems, we integrate proven, mature technologies:
-
-- **Knowledge Management** → AnythingLLM (RAG + Storage + UI)
-- **Pipeline Orchestration** → n8n (Workflow automation)
-- **Code Intelligence** → Claude/Gemini (Agent reasoning)
-- **Integration Layer** → MCP + Custom executors (Lightweight coordination)
+Our core philosophy: **don't reinvent, reuse**. There are mature, battle-tested systems for knowledge storage, workflow orchestration, and AI reasoning. We integrate them rather than rebuilding from scratch.
 
 ---
 
-## Latest Posts
+## Design Decisions
 
 {% assign sorted_posts = site.posts | sort: 'date' | reverse %}
 {% for post in sorted_posts %}
@@ -27,34 +20,7 @@ Instead of building custom solutions for common problems, we integrate proven, m
   <div class="post-meta">
     <time datetime="{{ post.date | date: '%Y-%m-%dT%H:%M:%SZ' }}">{{ post.date | date: "%B %d, %Y" }}</time>
   </div>
-  <p>{{ post.excerpt | strip_html | truncatewords: 30 }}</p>
-  <p><a href="{{ post.url | relative_url }}">Read more →</a></p>
+  <p>{{ post.excerpt | strip_html | truncatewords: 35 }}</p>
+  <a href="{{ post.url | relative_url }}">Read more →</a>
 </div>
 {% endfor %}
-
----
-
-## Quick Links
-
-- [📋 Full Architecture]({{ '/docs/ARCHITECTURE' | relative_url }})
-- [🏗️ KB Maintainer Design]({{ '/docs/kb-maintainer-design' | relative_url }})
-- [🔗 GitHub Repository](https://github.com/iv/reviewbot)
-- [📚 Intel Database]({{ '/intels' | relative_url }})
-
----
-
-## Project Structure
-
-```
-ReviewBot/
-├── main.go                    # GitHub App entry point
-├── internal/                  # Core logic
-│   ├── config/
-│   ├── github/
-│   └── handler/
-├── services/kb-maintainer/    # Knowledge base sync service
-├── intels/                    # Security intelligence markdown files
-└── docs/                      # This documentation
-```
-
-Each component is designed to be independently deployable and replaceable, following the "don't reinvent" philosophy.

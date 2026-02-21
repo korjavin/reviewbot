@@ -5,8 +5,8 @@ description: >
   AnythingLLM for knowledge management, n8n for orchestration, and Claude/Gemini
   agents for intelligent code review.
 
-url: "https://github.com/korjavin/reviewbot"
-baseurl: ""
+url: "https://korjavin.github.io"
+baseurl: "/reviewbot"
 
 # Theme
 theme: minima
