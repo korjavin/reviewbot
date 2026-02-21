@@ -36,8 +36,8 @@ func main() {
 		Level: slog.LevelInfo,
 	})))
 
-	// Seed ~/.claude/settings.json with MCP config on first run.
-	seedClaudeSettings()
+	// Seed ~/.claude.json with MCP config on first run.
+	seedClaudeConfig()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /review", handleReview)
@@ -146,56 +146,69 @@ Then review the code in the current directory. Examine the file structure and ke
 Output a concise, actionable code review in GitHub-flavored markdown. Reference specific file paths and line numbers where relevant. If the code looks good overall, say so and note any minor suggestions.`, owner, repo, prNumber)
 }
 
-// seedClaudeSettings writes ~/.claude/settings.json with the AnythingLLM MCP
-// server config if the file does not already exist. This runs once on startup
-// so the user can log in manually and keep their auth persistent on the volume.
-func seedClaudeSettings() {
+// seedClaudeConfig writes MCP server config into ~/.claude.json (user scope).
+// The native Claude Code installer reads user-scoped MCP servers from ~/.claude.json
+// (NOT from ~/.claude/settings.json which was the old format).
+//
+// We merge our mcpServers entry into the existing file if present, so that any
+// auth tokens written by `claude auth` (also stored in ~/.claude.json) are preserved.
+// The ~/.claude volume mount ensures settings survive container restarts.
+func seedClaudeConfig() {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		slog.Warn("could not determine home dir, skipping settings seed", "err", err)
+		slog.Warn("could not determine home dir, skipping MCP seed", "err", err)
 		return
 	}
 
-	claudeDir := filepath.Join(home, ".claude")
-	settingsPath := filepath.Join(claudeDir, "settings.json")
-
-	if _, err := os.Stat(settingsPath); err == nil {
-		slog.Info("~/.claude/settings.json already exists, skipping seed")
-		return
-	}
+	cfgPath := filepath.Join(home, ".claude.json")
 
 	anythingllmURL := os.Getenv("ANYTHINGLLM_URL")
 	if anythingllmURL == "" {
 		anythingllmURL = "http://anythingllm:3001"
 	}
 
-	settings := map[string]any{
-		"mcpServers": map[string]any{
-			"anythingllm": map[string]any{
-				"command": "anythingllm-mcp-server",
-				"env": map[string]string{
-					"ANYTHINGLLM_API_KEY":  os.Getenv("ANYTHINGLLM_API_KEY"),
-					"ANYTHINGLLM_BASE_URL": anythingllmURL,
-				},
-			},
+	// Read existing config (may contain auth tokens written by `claude auth`).
+	existing := map[string]any{}
+	if raw, err := os.ReadFile(cfgPath); err == nil {
+		if err := json.Unmarshal(raw, &existing); err != nil {
+			slog.Warn("~/.claude.json is not valid JSON, will overwrite", "err", err)
+			existing = map[string]any{}
+		}
+	}
+
+	// Check if anythingllm MCP server is already registered.
+	if servers, ok := existing["mcpServers"].(map[string]any); ok {
+		if _, has := servers["anythingllm"]; has {
+			slog.Info("anythingllm MCP server already in ~/.claude.json, skipping seed")
+			return
+		}
+	}
+
+	// Ensure mcpServers map exists.
+	servers, _ := existing["mcpServers"].(map[string]any)
+	if servers == nil {
+		servers = map[string]any{}
+	}
+	servers["anythingllm"] = map[string]any{
+		"type":    "stdio",
+		"command": "anythingllm-mcp-server",
+		"env": map[string]string{
+			"ANYTHINGLLM_API_KEY":  os.Getenv("ANYTHINGLLM_API_KEY"),
+			"ANYTHINGLLM_BASE_URL": anythingllmURL,
 		},
 	}
+	existing["mcpServers"] = servers
 
-	if err := os.MkdirAll(claudeDir, 0700); err != nil {
-		slog.Warn("could not create .claude dir", "err", err)
-		return
-	}
-
-	data, err := json.MarshalIndent(settings, "", "  ")
+	data, err := json.MarshalIndent(existing, "", "  ")
 	if err != nil {
-		slog.Warn("could not marshal claude settings", "err", err)
+		slog.Warn("could not marshal ~/.claude.json", "err", err)
 		return
 	}
 
-	if err := os.WriteFile(settingsPath, data, 0600); err != nil {
-		slog.Warn("could not write claude settings", "err", err)
+	if err := os.WriteFile(cfgPath, data, 0600); err != nil {
+		slog.Warn("could not write ~/.claude.json", "err", err)
 		return
 	}
 
-	slog.Info("seeded ~/.claude/settings.json with AnythingLLM MCP config")
+	slog.Info("seeded ~/.claude.json with AnythingLLM MCP config (user scope)")
 }
