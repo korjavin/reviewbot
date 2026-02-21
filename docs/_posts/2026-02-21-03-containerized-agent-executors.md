@@ -1,141 +1,50 @@
 ---
 layout: post
-title: "Containerized Claude & Gemini Executors: Lightweight Agent Orchestration"
+title: "Claude in a box. Gemini in a box. Triggered by a webhook."
 date: 2026-02-21 10:00:00 -0000
-categories: architecture agents
-excerpt: "How we package Claude and Gemini as independent, containerized services triggered by n8n."
+categories: architecture
+excerpt: "We wanted the full reasoning power of frontier AI agents without building a custom orchestration layer. So we containerized them and gave them a simple HTTP interface."
 ---
 
-## The Problem: Agents Need Lightweight Execution
+Claude and Gemini are extraordinary at exploring codebases. Give Claude access to a repo and a question, and it'll find the auth bypass you missed. The challenge isn't the intelligence — it's the orchestration.
 
-Claude and Gemini agents excel at code exploration and reasoning, but orchestrating them from n8n creates a dilemma:
+These models aren't instant. A proper code exploration run takes minutes. You can't block a workflow engine waiting for that. And you need to be able to run multiple agents in parallel, spin them up on demand, and not pay for idle compute.
 
-🔴 **Heavy orchestration**: Build a complex n8n integration with state management
-🔴 **Embedded agents**: Spin up agents inside n8n, blocking the workflow engine
-🔴 **Long polling**: Agents take minutes to explore code; n8n shouldn't wait synchronously
+---
 
-We needed a way to:
-- ✅ Trigger agents asynchronously
-- ✅ Let agents run independently (exploring repos, analyzing code)
-- ✅ Receive results back in n8n
-- ✅ Scale multiple concurrent reviews
+## The pattern: containers with webhook callbacks
 
-## Our Solution: Containerized Executors
+Each agent — Claude, Gemini, or any future model — runs as an independent container with a simple HTTP interface:
 
-Instead of trying to embed agents in n8n, we package them as independent services:
+1. **n8n POSTs a job**: repo URL, query, knowledge base workspace, callback address
+2. **The container starts the agent**: it has everything it needs — MCP access to the KB, GitHub API credentials, the task
+3. **The agent does its work**: explores the code, queries context, reasons about findings
+4. **Results POST back**: to a webhook endpoint, picked up by n8n, which continues the pipeline
 
-```
-Claude Executor
-├── HTTP API endpoint
-├── Receives: repo context, query, KB reference
-├── Runs: Claude with agentic loop (code exploration)
-└── Returns: analysis + findings
+That's it. No custom scheduler. No distributed job queue. No complex state machine.
 
-Gemini Executor
-├── Similar contract to Claude
-├── Parallel execution possible
-└── Comparison of results
+---
 
-Each runs in its own container, spawned on-demand
-```
+## Why containers
 
-### Architecture
+Each run gets a clean environment. No state leaking between jobs. The agent can be given read access to only what it needs for that review. If it crashes, the container dies cleanly — no impact on anything else.
 
-```
-n8n Workflow
-    ↓
-POST /execute (lightweight request)
-    ↓
-Executor Container (Docker/Podman)
-    ├→ Initialize Claude agent
-    ├→ Explore repository
-    ├→ Query AnythingLLM for context
-    ├→ Perform code analysis
-    ├→ Generate report
-    └→ POST back to webhook endpoint
-        ↓
-n8n captures results → updates GitHub PR
-```
+Scaling is straightforward: more concurrent reviews means more containers. Container runtime (Docker, Podman) handles the resource limits.
 
-### Benefits of Containerization
+And crucially — it's testable. We run the exact same container locally that we run in production. The agent behaves the same in both environments.
 
-| Aspect | Benefit |
-|--------|---------|
-| **Independence** | Agents don't block n8n workflows |
-| **Scalability** | Spawn multiple executors concurrently |
-| **Isolation** | Each agent gets clean environment |
-| **Testability** | Run agents locally, same as production |
-| **Lightweight trigger** | n8n just sends HTTP request + waits |
-| **Resource control** | Limit CPU/memory per executor |
+---
 
-## How n8n Triggers Them
+## The lightweight shim
 
-n8n's HTTP node makes this simple:
+The container itself doesn't do much beyond starting the agent and handling the HTTP contract. The intelligence is entirely in Claude or Gemini. The shim is ~100 lines — receive job, configure agent, fire callback when done.
 
-1. **Send request**
-   ```json
-   {
-     "repo_url": "https://github.com/org/repo",
-     "query": "Security vulnerabilities in authentication",
-     "kb_workspace": "repo-123",
-     "callback_url": "https://n8n.example.com/webhook/results"
-   }
-   ```
+This means we can swap models, upgrade agent versions, or add entirely new reviewers (a security-specialized agent, a performance-focused one) just by building a new container. The pipeline doesn't change. n8n doesn't change.
 
-2. **Executor receives it** → Starts agent
-3. **Agent completes analysis** → POSTs back to callback
-4. **n8n workflow resumes** → Continues with results
+---
 
-### Why Not a Heavy Orchestrator?
+## What this unlocks
 
-We considered:
-- Kubernetes + CRDs (overcomplicated for our scale)
-- AWS Step Functions (vendor lock-in)
-- Custom Go scheduler (reinventing the wheel)
+We can run Claude and Gemini on the same codebase simultaneously and compare their findings. We can A/B test different agent prompting strategies without changing infrastructure. We can add a model the day it's released, just by wrapping it the same way.
 
-**Containerized executors + webhooks** gives us:
-- ✅ Simple, composable architecture
-- ✅ Works with any container runtime (Docker, Podman)
-- ✅ Easy to run locally and in production
-- ✅ No vendor lock-in
-
-## Example: Claude Agent Executor
-
-```go
-// services/claude-executor/main.go
-func handleExecutionRequest(w http.ResponseWriter, r *http.Request) {
-    // 1. Parse request
-    req := parseExecutionRequest(r)
-
-    // 2. Initialize Claude agent with MCP
-    agent := claude.NewAgent(
-        client,
-        tools.WithMCP(mcpConfig),    // Access to KB via MCP
-        tools.WithGitHub(githubCfg), // Access to repo
-    )
-
-    // 3. Run exploration loop
-    result := agent.Explore(ctx, req.Query)
-
-    // 4. POST back to callback
-    postResults(req.CallbackURL, result)
-}
-```
-
-The executor is:
-- **Stateless**: Can be replicated across containers
-- **Focused**: Specializes in agent execution
-- **Observable**: Logs its own execution
-- **Testable**: Works offline with mock data
-
-## What's Next?
-
-With this architecture, we can:
-- **Add specialized executors** (security-focused, performance-focused, etc.)
-- **Compare agents** (Claude vs Gemini on same task)
-- **Build consensus** (multiple agents + voting on findings)
-- **Create feedback loops** (agent corrections based on review outcomes)
-
-All without modifying n8n or rebuilding orchestration logic.
-
-**Philosophy: Use containers for execution, use n8n for coordination.**
+The power is in keeping the interface simple. Webhook in, webhook out. Everything else is the agent's problem.

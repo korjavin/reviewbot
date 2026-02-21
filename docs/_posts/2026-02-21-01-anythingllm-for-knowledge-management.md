@@ -1,91 +1,57 @@
 ---
 layout: post
-title: "AnythingLLM for Knowledge Management: Reusing RAG instead of Reinventing"
+title: "We're not building a knowledge base. We're reusing one."
 date: 2026-02-21 08:00:00 -0000
-categories: architecture design
-excerpt: "Why we chose AnythingLLM as our RAG and knowledge base system instead of building our own."
+categories: architecture
+excerpt: "Every AI security reviewer has the same problem: context is expensive. We solved it without writing a single line of vector database code."
 ---
 
-## The Problem: Token Explosion in Code Review
+Here's the dirty secret of AI code review: it's stupidly expensive to do it right.
 
-When reviewing code in unfamiliar repositories, Claude needs massive context to understand security implications. Re-processing the entire repository structure, dependencies, and architecture on every review request wastes tokens and creates redundant computation.
+To catch a real vulnerability, the AI needs to understand the whole picture — how auth is wired, where secrets flow, what third-party libraries are doing. That means feeding it massive context every single time. For any repo with real codebase size, you're burning 50-100k tokens per review. Run it daily? Weekly? Across 20 repos? The math gets ugly fast.
 
-The solution? **Persistent, searchable knowledge bases** that grow as we review more repos.
+So we asked the obvious question: **why re-read everything from scratch on every run?**
 
-## Why Not Build Our Own?
+---
 
-Building a custom RAG system requires:
-- Document chunking strategies
-- Embedding generation pipelines
-- Vector database setup & maintenance
-- Retrieval ranking algorithms
-- Storage layer management
-- Web UI for knowledge exploration
+## The insight: treat context like a database
 
-We could spend weeks on infrastructure that's already mature.
+Codebases don't change completely between reviews. What if we stored what the AI already knows — and only retrieved the relevant parts when needed?
 
-## Why AnythingLLM?
+That's exactly what RAG (Retrieval Augmented Generation) is for. Index documents once, query them semantically when you need them. Instead of dumping an entire codebase into a prompt, you pull the 2-3 most relevant pieces of context. Same quality, fraction of the tokens.
 
-**AnythingLLM** is exactly what we needed:
+We could have built that system ourselves. Chunking strategy, embedding pipeline, vector store, retrieval ranking, storage layer, admin UI. Probably 6-8 weeks of solid engineering.
 
-✅ **RAG Out of the Box** - Semantic search + embedding management
-✅ **Multi-Workspace Support** - Separate KB per repository
-✅ **Web UI** - Browse, search, manage documents visually
-✅ **REST API** - Programmatic access from our services
-✅ **Full-Text + Vector Search** - Hybrid approach for accuracy
-✅ **Self-Hosted** - Complete control, no external dependencies
+We didn't.
 
-### How We Use It
+---
 
-For each repository ReviewBot reviews, we create a separate **workspace** in AnythingLLM:
+## AnythingLLM already exists
 
-```
-├── workspace: repo-name-1
-│   ├── AI architecture docs
-│   ├── Security-relevant code patterns
-│   ├── Previous review findings
-│   └── Dependencies analysis
-│
-├── workspace: repo-name-2
-│   ├── Different context, separate embeddings
-│   └── No token waste from irrelevant repos
-```
+[AnythingLLM](https://anythingllm.com) is a mature, self-hosted RAG platform that ships with everything we needed out of the box:
 
-When Claude reviews code, it retrieves relevant context from the appropriate workspace:
+- Document storage and embedding
+- Semantic + full-text hybrid search
+- Per-workspace separation (so repo A's context doesn't pollute repo B's)
+- A clean REST API for programmatic access
+- A web UI to browse and chat with indexed documents
 
-```
-Repository Query → AnythingLLM Search → Relevant Docs
-                        ↓
-                   Claude Agent
-                        ↓
-                  Intelligent Review
-```
+We run it ourselves, so nothing leaves our infrastructure. And because it's API-driven, our agents talk to it natively — they search for relevant patterns, retrieve specific documents, and use that context to produce more accurate reviews.
 
-### Real-World Impact
+Here's what it looks like when we're exploring an indexed knowledge base:
 
-Instead of:
-- 🔴 Every review: embed entire codebase (~50-100k tokens)
-- 🔴 Repeat: same documents, same embeddings
+![AnythingLLM chat interface showing a conversation about security intel]({{ '/assets/images/anythingllm-chat-example.png' | relative_url }})
 
-We get:
-- 🟢 One-time: document ingestion to AnythingLLM
-- 🟢 Every review: query semantically relevant excerpts (~2-5k tokens)
-- 🟢 **90%+ token reduction** for repeat reviews
+That's not a prototype — it's the actual system. We can chat with our security knowledge base, ask it questions, verify what's indexed. The same workspace that feeds our automated reviewers.
 
-## The Experience
+---
 
-Here's what it looks like in practice:
+## What we actually get
 
-![AnythingLLM Chat Interface](/assets/images/anythingllm-chat-example.png)
+For any repo we've reviewed before, the second run costs a fraction of the first. Context is already indexed. The agent queries what's relevant, skips what's not.
 
-The chat UI lets us (and eventually end-users) explore the knowledge base, verify that our indexed documents are relevant, and even have conversations about the codebase knowledge before initiating automated reviews.
+Over time, each workspace becomes a living record of everything we know about that codebase — past findings, architecture notes, dependency analysis. The more we review, the smarter the next review gets.
 
-## What's Next?
+That's the compounding effect we're building toward. Not just cheaper reviews — reviews that get better as they accumulate context.
 
-As we review more repositories, AnythingLLM becomes smarter:
-- Growing corpus of security patterns
-- Cross-repo insights (similar vulnerabilities in different codebases)
-- Better embeddings for code-specific domains
-- Foundation for future review quality improvements
-
-We chose reuse over reinvention, keeping our focus on what makes ReviewBot unique: **intelligent, context-aware code review automation**.
+We got all of that by choosing not to reinvent what already exists.

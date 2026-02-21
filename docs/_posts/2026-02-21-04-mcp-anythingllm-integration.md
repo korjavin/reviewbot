@@ -1,157 +1,51 @@
 ---
 layout: post
-title: "MCP AnythingLLM: Seamless KB Access for Agents"
+title: "Giving our agents native access to the knowledge base"
 date: 2026-02-21 11:00:00 -0000
-categories: architecture integration
-excerpt: "How Model Context Protocol (MCP) connects our agents to AnythingLLM knowledge bases."
+categories: architecture
+excerpt: "Model Context Protocol lets Claude and Gemini treat our knowledge base as a tool they just... use. No API wrappers, no custom glue code."
 ---
 
-## The Challenge: Agents Need KB Access
+The AI agent needs to search the knowledge base. Simple enough — hit the AnythingLLM API, parse the response, format it into context.
 
-Our Claude/Gemini agents need to:
-1. Receive code to review
-2. Query AnythingLLM for relevant knowledge
-3. Use that context to inform their analysis
+Except you'd need to write that wrapper for Claude. Then again for Gemini. Then again for any future model. Each one needs to know the API shape, handle errors, manage authentication. It's not hard work, but it's repetitive, fragile, and it lives in every executor you ship.
 
-Without tight integration, agents need to:
-- Make direct HTTP calls to AnythingLLM REST API
-- Parse responses, format contexts
-- Manage rate limiting, error handling
-- Custom code for each executor
+There's a better way.
 
-This leads to duplication and tight coupling.
+---
 
-## Enter Model Context Protocol (MCP)
+## MCP: a universal tool interface for AI models
 
-**MCP** is an open standard for connecting AI models to resources:
+[Model Context Protocol](https://modelcontextprotocol.io) is an open standard from Anthropic that defines how AI models discover and call external tools. Instead of writing per-model API wrappers, you write one MCP server — and every MCP-compatible model can use it.
 
-> MCP standardizes how applications can provide context and tools to AI models.
+We built `mcp-anythingllm`: a small MCP server that exposes our knowledge base as a set of native tools. The agent sees tools like `search_workspace`, `get_document`, `list_workspaces` — and uses them the same way it would use any other built-in capability.
 
-Instead of agents calling APIs directly, MCP acts as a standardized interface:
+---
 
-```
-Claude Agent
-    ↓
-MCP Client (built into executor)
-    ↓
-MCP Servers (we write/configure these)
-    ├→ AnythingLLM Server
-    ├→ GitHub Server
-    └→ ... other tools
-```
+## What it looks like in practice
 
-## Our MCP Server: `mcp-anythingllm`
+When Claude is reviewing code and needs security context, it doesn't make an explicit API call. It reasons:
 
-We built a lightweight MCP server that exposes AnythingLLM as tools:
+> "I need to understand common JWT implementation vulnerabilities for this codebase."
 
-```go
-// mcp-anythingllm/server.go
-type Server struct {
-    client *anythingllm.Client
-}
+And then it just calls the search tool. The MCP layer handles the rest — routing the request to AnythingLLM, returning relevant documents, formatting them into context Claude can use.
 
-// Agents call these via MCP
-func (s *Server) SearchWorkspace(query string) []Document
-func (s *Server) GetDocument(id string) Document
-func (s *Server) ListWorkspaces() []Workspace
-func (s *Server) ChatWithContext(query string, workspace string) string
-```
+From the agent's perspective, the knowledge base is just another capability it has. From our infrastructure perspective, it's a small server that translates MCP calls into AnythingLLM API calls.
 
-### How It Works
+---
 
-In a Claude executor:
+## Internal only, intentionally
 
-```go
-executor := NewClaudeExecutor()
+`mcp-anythingllm` isn't exposed externally. It runs inside the executor containers — available to the agents, invisible to everything else. The knowledge base is only accessible through the reviewers that need it.
 
-// Automatically available to Claude as tools
-executor.AddMCPServer("anythingllm",
-    "mcp-anythingllm",
-    []string{"localhost:3000"},
-)
+This keeps the security model simple: agents get access to KB through a controlled interface, nothing else in the stack touches it directly.
 
-// Claude can now use these naturally:
-// "Search for JWT vulnerability patterns in workspace 'auth-service'"
-// "Get the full document about OAuth2 implementation"
-// etc.
-```
+---
 
-Claude accesses the KB **natively** through MCP, without custom code.
+## Adding new tools the same way
 
-## Architecture
+The same pattern works for anything else we want to give agents access to — GitHub repo browsing, SAST tool output, dependency vulnerability databases. Write an MCP server, add it to the executor, and every model gets the tool immediately.
 
-```
-Claude Executor Container
-├── Claude API client
-├── MCP Client
-│   └→ mcp-anythingllm Server
-│       └→ AnythingLLM HTTP API
-│           └→ Vector DB + Documents
-│
-├── GitHub integration (also via MCP)
-└── Output to n8n webhook
-```
+We're not building a custom tool integration layer. We're using a standard that the model providers are converging on, which means the ecosystem of available tools will only grow.
 
-### Key Benefits
-
-| Aspect | Benefit |
-|--------|---------|
-| **Standard interface** | Claude, Gemini, and future agents use same tools |
-| **No custom API code** | MCP handles transport, serialization |
-| **Tool discovery** | Agents introspect available tools automatically |
-| **Consistent error handling** | MCP standardizes failures |
-| **Future-proof** | When we add new KB systems, just add MCP server |
-
-## Example: Agent Exploration
-
-When a Claude agent reviews code:
-
-```
-Claude: "I need to understand the authentication patterns"
-  ↓
-(Internally uses MCP)
-  ↓
-mcp-anythingllm.SearchWorkspace("authentication patterns")
-  ↓
-Returns: [doc1.md (Session auth), doc2.md (JWT), doc3.md (OAuth)]
-  ↓
-Claude: "Found 3 relevant docs. Analyzing for security..."
-```
-
-No explicit API calls. No boilerplate. Just agents using tools.
-
-## Not Exposed Externally
-
-Important design choice: **mcp-anythingllm is internal only**.
-
-- 🔴 NOT exposed to GitHub
-- 🔴 NOT exposed to n8n directly
-- 🔴 Only accessible within executor containers
-
-This keeps:
-- ✅ Security boundaries clean
-- ✅ KB access controlled (through containers)
-- ✅ Executor isolation intact
-- ✅ Simple deployment model (no extra services needed)
-
-## What's Next?
-
-With MCP, we can easily add:
-- **GitHub MCP server** - Agents browse repos natively
-- **Vector search MCP** - Direct embedding queries
-- **Custom analysis MCP** - Domain-specific tools
-- **Feedback loop MCP** - Agents improve KB
-
-All without modifying Claude/Gemini code.
-
-## Why This Matters
-
-MCP exemplifies our philosophy:
-1. Use proven standards (MCP is Anthropic's standard)
-2. Minimize custom code (MCP handles the plumbing)
-3. Enable composition (multiple MCP servers work together)
-4. Future-proof (built on open protocol)
-
-The result: Claude agents that feel native to our platform, with seamless KB access and tool discovery.
-
-**Philosophy: Use standards (MCP) to glue components together.**
+One protocol to connect the agents to everything they need.

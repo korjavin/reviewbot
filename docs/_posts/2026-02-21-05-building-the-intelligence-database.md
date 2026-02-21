@@ -1,252 +1,74 @@
 ---
 layout: post
-title: "Building the Intelligence Database: Offline Processing & Continuous Imports"
+title: "Structured security intelligence, continuously imported"
 date: 2026-02-21 12:00:00 -0000
-categories: architecture intelligence
-excerpt: "How we gather security intelligence from papers and OWASP, structure it, and keep it fresh."
+categories: architecture
+excerpt: "An AI reviewer is only as good as what it knows. We're building a curated, structured database of security intelligence — and a pipeline to keep it fresh automatically."
 ---
 
-## The Foundation: Human-Curated Intelligence
+An AI with great reasoning but no domain knowledge will miss things. It needs to know what a JWT timing attack looks like, what the OWASP API Top 10 actually means in code, how prompt injection works in LLM-backed applications.
 
-AnythingLLM's RAG system works best when seeded with high-quality documents. We don't start with empty workspaces.
+You can bake some of this into prompts, but prompts have limits. What you really want is a knowledge base the agent can query — rich, structured, authoritative, and always up to date.
 
-Instead, we're building **structured security intelligence**:
-
-```
-Papers
-├── Academic research
-├── Security whitepapers
-└── Industry analyses
-
-OWASP Reports
-├── OWASP Top 10
-├── API Security Guidelines
-├── Threat Modeling Checklists
-└── Secure Coding Practices
-
-Custom Analysis
-├── Repo-specific patterns
-├── Architecture notes
-└── Vulnerability mappings
-```
-
-This curated KB gives agents:
-- ✅ Authoritative security knowledge
-- ✅ Structured taxonomies
-- ✅ Actionable guidance
-- ✅ Low noise, high signal
-
-## Stage 1: Offline Processing
-
-We process papers and reports **offline** into structured markdown:
-
-```
-Input: "OWASP API Security Top 10.pdf"
-  ↓
-Processing:
-├─ Extract key vulnerabilities
-├─ Add structured frontmatter (title, severity, tags)
-├─ Create clear examples
-├─ Link to remediation strategies
-  ↓
-Output: YAML frontmatter + Markdown content
+That's what we're building.
 
 ---
-title: Broken Authentication (API1:2019)
-severity: critical
-tags: [authentication, owasp-api, top10]
-references:
-  - https://owasp.org/www-project-api-security/
-  - https://...
----
 
-# Broken Authentication
+## Starting with the right raw material
 
-Authentication mechanisms are often incorrectly implemented...
-```
+We process papers, OWASP reports, and security research offline into structured markdown documents. Not just extracted text — genuinely useful intel with metadata that makes it searchable and filterable.
 
-### Example: AI Red-Teaming Intel
-
-We have curated intelligence packs like `intels/ai-redteaming-intel-pack/`:
-
-```
-ai-redteaming-intel-pack/
-├── jailbreak-techniques.md      (collected attack patterns)
-├── mitigation-strategies.md     (defenses)
-├── evaluation-frameworks.md     (how to test)
-├── threat-models.md             (taxonomy)
-└── case-studies.md              (real incidents)
-```
-
-Each document has **structured frontmatter**:
+Each document has frontmatter that captures what it's about:
 
 ```yaml
 ---
-title: Prompt Injection via User Input
+title: Prompt Injection via Untrusted User Input
 severity: high
 category: ai-security
 tags:
   - prompt-injection
-  - input-validation
   - llm-attacks
+  - input-validation
   - mitigation
 ---
 ```
 
-**Why structured?**
-- Agents can filter by severity, tags, category
-- Embedding search becomes more precise
-- Easy to audit and update
-- Future tooling can analyze the corpus
+Then the document itself covers the technique in depth — what it is, how it manifests, how to catch it in code review, how to remediate it.
 
-## Stage 2: Continuous Imports (kb-maintainer)
+The result is a collection of intel packs organized by domain. The `ai-redteaming-intel-pack`, for example, covers jailbreak techniques, prompt injection patterns, evaluation frameworks, and real incident case studies. Not raw documents — curated, structured, actionable knowledge.
 
-Once documents are created, **kb-maintainer** keeps AnythingLLM in sync:
+We lean on embedding and full-text search rather than rigid taxonomies, so the tags and categories are there to improve retrieval quality, not to gate access.
 
-```
-intels/ directory (on host)
-    ↓
-inotify watches for changes
-    ↓
-kb-maintainer service
-    ├→ Detects new/modified files
-    ├→ Computes MD5 (skip unchanged)
-    ├→ Uploads to AnythingLLM
-    └→ Updates state.json
-```
+---
 
-### The Service in Action
+## Getting it into the system automatically
 
-```go
-// services/kb-maintainer/main.go
-func main() {
-    // Watch for file changes
-    watcher := NewFileWatcher(intelsDir)
+Once documents exist, our `kb-maintainer` service keeps AnythingLLM in sync without any manual intervention.
 
-    // Sync on startup
-    sync.FullSync()
+It watches the `intels/` directory using filesystem events. The moment a file lands there — new intel, updated document, anything — it picks it up, checks if it's actually changed (MD5 comparison against cached state), and uploads it to the appropriate AnythingLLM workspace.
 
-    // Continuous monitoring
-    for event := range watcher.Events {
-        switch event.Op {
-        case CREATE, MODIFY:
-            sync.SyncFile(event.Name)
-        case DELETE:
-            sync.DeleteFile(event.Name)
-        }
-    }
-}
-```
+Drop a file in. It's indexed within seconds. No admin panel, no manual upload step, no deployment needed.
 
-### Non-Intrusive Syncing
+The same service runs a full sync periodically to catch anything that might have slipped through, and handles deletions — when a document is removed from the directory, it's removed from the knowledge base too.
 
-The kb-maintainer service:
-- 🟢 Tracks state in `state.json` (MD5 hashes)
-- 🟢 Only uploads changed files
-- 🟢 Retries failed uploads
-- 🟢 Handles large batches efficiently
-- 🟢 Runs periodically (5-minute full-sync)
+---
 
-This means:
-- Drop new intel files into `/intels`
-- kb-maintainer picks them up automatically
-- No manual uploads or admin work
-- Knowledge base stays fresh
+## Workspace strategy
 
-## How It Flows
+We separate our intel into two categories of workspace:
 
-```
-Researcher creates intel:
-    intels/new-vulnerability.md
-        ↓
-kb-maintainer detects:
-    File created event
-        ↓
-Extracts frontmatter:
-    title, severity, tags
-        ↓
-Uploads to AnythingLLM:
-    Workspace: intels
-        ↓
-Claude agents can now:
-    Search & reference the intel
-        ↓
-Reviews become smarter:
-    With new knowledge available
-```
+**Universal intel** — OWASP, academic papers, general security patterns. Loaded into a shared workspace that every agent can query regardless of what repo they're reviewing.
 
-## Multi-Workspace Strategy
+**Per-repo context** — findings from previous reviews, architecture notes, dependency analysis specific to one codebase. Isolated so there's no cross-contamination between projects.
 
-We use AnythingLLM workspaces strategically:
+This means when an agent reviews a new PR on a repo it's seen before, it has two sources of context: the universal security knowledge, and everything it's already learned about that specific codebase.
 
-```
-├── workspace: "intels"
-│   ├── OWASP guidelines
-│   ├── Security papers
-│   ├── Best practices
-│   └── Vulnerability taxonomies
-│   └── Used by: All executors
-│
-├── workspace: "repo-123"
-│   ├── Architecture docs
-│   ├── Code patterns
-│   ├── Review history
-│   └── Used by: Reviewers for repo-123
-│
-└── workspace: "repo-456"
-    └── Separate context for different repo
-```
+---
 
-**Benefits:**
-- Universal intel (OWASP, papers) shared across repos
-- Per-repo context stays isolated
-- Agents pick the right workspace for context
-- No token waste on irrelevant documents
+## The flywheel
 
-## Future Evolution
+Here's what this enables over time: every review adds to the per-repo knowledge base. The next review starts with more context than the last. Findings from six months ago inform analysis today. Patterns that kept appearing in one codebase get noted and resurface when the same code shows up in a different form.
 
-As the intelligence database grows:
+We're not just reviewing code. We're building institutional memory for security analysis — and doing it in a way that compounds automatically.
 
-1. **Structured querying** - Tag-based filters, severity levels
-2. **Embedding optimization** - Code-specific models
-3. **Version control** - Track intel changes over time
-4. **Feedback loops** - Improve intelligence based on review outcomes
-5. **Automated ingestion** - Scan websites, papers for new content
-6. **Cross-linking** - Connect related intel documents
-
-## The Workflow
-
-```
-Continuous Pipeline (in n8n):
-
-Every 24 hours:
-├→ Check for new OWASP releases
-├→ Fetch academic papers (RSS, APIs)
-├→ Process (extract, structure, format)
-├→ Add to intels/
-├→ kb-maintainer syncs automatically
-└→ Agents have fresh knowledge
-```
-
-## Why This Approach?
-
-| Alternative | Problem | Our Approach | Benefit |
-|---|---|---|---|
-| Unstructured docs | Hard to search, noisy | Frontmatter taxonomy | Precise, filterable |
-| Manual uploads | Slow, error-prone | Auto-import service | Fresh, continuous |
-| All-in-one workspace | Token waste, noise | Workspace separation | Focused context |
-| Third-party KB | Vendor lock-in | Self-hosted AnythingLLM | Full control |
-
-## Philosophy
-
-We're building intelligence, not just storing documents:
-
-1. **Human curation** - Not all content is equal
-2. **Structured metadata** - Enables smart search
-3. **Continuous updates** - Knowledge base grows
-4. **Workspace isolation** - Efficient token use
-5. **Open standards** - Easy to export, audit, evolve
-
-The result: agents with access to curated, searchable, continuously-updated security knowledge.
-
-**Philosophy: Build intelligence incrementally, structure it thoughtfully, keep it fresh automatically.**
+The intelligence database is how ReviewBot gets smarter without anyone having to make it smarter.
