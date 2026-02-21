@@ -150,9 +150,11 @@ Output a concise, actionable code review in GitHub-flavored markdown. Reference 
 // The native Claude Code installer reads user-scoped MCP servers from ~/.claude.json
 // (NOT from ~/.claude/settings.json which was the old format).
 //
-// We merge our mcpServers entry into the existing file if present, so that any
-// auth tokens written by `claude auth` (also stored in ~/.claude.json) are preserved.
-// The ~/.claude volume mount ensures settings survive container restarts.
+// We merge our entries into the existing file so auth tokens (also in ~/.claude.json)
+// written by `claude auth` are preserved.
+//
+// We also pre-approve all anythingllm MCP tools via permissions.allow so that
+// headless `claude -p` runs never get stuck on "Do you want to proceed?" prompts.
 func seedClaudeConfig() {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -176,15 +178,7 @@ func seedClaudeConfig() {
 		}
 	}
 
-	// Check if anythingllm MCP server is already registered.
-	if servers, ok := existing["mcpServers"].(map[string]any); ok {
-		if _, has := servers["anythingllm"]; has {
-			slog.Info("anythingllm MCP server already in ~/.claude.json, skipping seed")
-			return
-		}
-	}
-
-	// Ensure mcpServers map exists.
+	// ── MCP server registration ────────────────────────────────────────────────
 	servers, _ := existing["mcpServers"].(map[string]any)
 	if servers == nil {
 		servers = map[string]any{}
@@ -199,6 +193,29 @@ func seedClaudeConfig() {
 	}
 	existing["mcpServers"] = servers
 
+	// ── Pre-approve all anythingllm MCP tool calls ─────────────────────────────
+	// Without this, `claude -p` in headless mode halts on "Do you want to proceed?"
+	// for every MCP tool invocation, even when --dangerously-skip-permissions is set.
+	// The pattern "mcp__anythingllm__*" allows all tools from the anythingllm server.
+	perms, _ := existing["permissions"].(map[string]any)
+	if perms == nil {
+		perms = map[string]any{}
+	}
+	allow, _ := perms["allow"].([]any)
+	// Only add the wildcard if not already present.
+	found := false
+	for _, v := range allow {
+		if s, ok := v.(string); ok && s == "mcp__anythingllm__*" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		allow = append(allow, "mcp__anythingllm__*")
+	}
+	perms["allow"] = allow
+	existing["permissions"] = perms
+
 	data, err := json.MarshalIndent(existing, "", "  ")
 	if err != nil {
 		slog.Warn("could not marshal ~/.claude.json", "err", err)
@@ -210,5 +227,5 @@ func seedClaudeConfig() {
 		return
 	}
 
-	slog.Info("seeded ~/.claude.json with AnythingLLM MCP config (user scope)")
+	slog.Info("seeded ~/.claude.json with AnythingLLM MCP config and permissions")
 }

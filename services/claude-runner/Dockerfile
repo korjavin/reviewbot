@@ -24,6 +24,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL https://claude.ai/install.sh | bash
 
+# The native Claude installer puts the binary at ~/.local/bin/claude.
+# Add it to PATH so the Go runner and any shell scripts can invoke `claude`.
+ENV PATH="/root/.local/bin:$PATH"
+
 COPY --from=builder /build/claude-runner /usr/local/bin/claude-runner
 
 EXPOSE 8080
