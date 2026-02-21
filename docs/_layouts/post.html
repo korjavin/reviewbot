@@ -1,0 +1,31 @@
+---
+layout: default
+---
+
+<article class="post">
+  <header>
+    <h1>{{ page.title }}</h1>
+    <div class="post-meta">
+      <time datetime="{{ page.date | date: '%Y-%m-%dT%H:%M:%SZ' }}">{{ page.date | date: "%B %d, %Y" }}</time>
+      {% if page.author %}<span class="author">by {{ page.author }}</span>{% endif %}
+      {% if page.categories %}
+      <span class="categories">
+        {% for category in page.categories %}
+          <a href="{{ '/blog' | relative_url }}">#{{ category }}</a>{% unless forloop.last %} {% endunless %}
+        {% endfor %}
+      </span>
+      {% endif %}
+    </div>
+  </header>
+
+  <div class="post-content">
+    {{ content }}
+  </div>
+
+  <footer class="post-footer">
+    <hr>
+    <p>
+      <a href="{{ '/' | relative_url }}">← Back to home</a>
+    </p>
+  </footer>
+</article>

@@ -1,0 +1,43 @@
+title: ReviewBot
+tagline: "Security review bot with RAG-enhanced context"
+description: >
+  Architecture and design decisions for ReviewBot — a GitHub App that leverages
+  AnythingLLM for knowledge management, n8n for orchestration, and Claude/Gemini
+  agents for intelligent code review.
+
+url: "https://github.com/korjavin/reviewbot"
+baseurl: ""
+
+# Theme
+theme: minima
+minima:
+  social_links:
+    - platform: github
+      user_url: "https://github.com/korjavin"
+
+# Markdown
+markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
+  syntax_highlighter: rouge
+
+# Collections
+collections:
+  posts:
+    output: true
+    permalink: /blog/:year/:month/:day/:title/
+
+# Plugins
+plugins:
+  - jekyll-feed
+  - jekyll-seo-tag
+
+# Defaults
+defaults:
+  - scope:
+      path: ""
+      type: "posts"
+    values:
+      layout: "post"
+      author: "ReviewBot Team"
