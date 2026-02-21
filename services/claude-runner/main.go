@@ -164,11 +164,6 @@ func seedClaudeConfig() {
 
 	cfgPath := filepath.Join(home, ".claude.json")
 
-	anythingllmURL := os.Getenv("ANYTHINGLLM_URL")
-	if anythingllmURL == "" {
-		anythingllmURL = "http://anythingllm:3001"
-	}
-
 	// Read existing config (may contain auth tokens written by `claude auth`).
 	existing := map[string]any{}
 	if raw, err := os.ReadFile(cfgPath); err == nil {
@@ -187,8 +182,11 @@ func seedClaudeConfig() {
 		"type":    "stdio",
 		"command": "anythingllm-mcp-server",
 		"env": map[string]string{
-			"ANYTHINGLLM_API_KEY":  os.Getenv("ANYTHINGLLM_API_KEY"),
-			"ANYTHINGLLM_BASE_URL": anythingllmURL,
+			// Use ${VAR} expansion — native Claude Code resolves these at runtime
+			// when spawning the MCP process, so the container ENV is always picked up
+			// correctly even if the volume was seeded before the env vars were set.
+			"ANYTHINGLLM_API_KEY":  "${ANYTHINGLLM_API_KEY}",
+			"ANYTHINGLLM_BASE_URL": "${ANYTHINGLLM_URL:-http://anythingllm:3001}",
 		},
 	}
 	existing["mcpServers"] = servers
