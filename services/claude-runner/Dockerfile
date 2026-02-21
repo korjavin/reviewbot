@@ -20,20 +20,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a non-root user. Claude Code refuses --dangerously-skip-permissions
-# when running as root, so all claude operations must run as a normal user.
+# Create a non-root user.
 RUN useradd -m -u 1000 -s /bin/bash claude
 
-# Switch to the claude user for all subsequent steps.
-# Set npm prefix to user-local dir so `npm install -g` doesn't need root.
-USER claude
-ENV NPM_CONFIG_PREFIX=/home/claude/.npm-global
-ENV PATH="/home/claude/.npm-global/bin:/home/claude/.local/bin:$PATH"
+# Create an app directory for binaries so they aren't shadowed by the
+# /home/claude Docker volume mount in docker-compose.yml.
+RUN mkdir -p /app && chown claude:claude /app
 
-# Install anythingllm-mcp-server (goes to ~/.npm-global/bin) and Claude Code CLI
-# (native installer puts binary at ~/.local/bin/claude).
+USER claude
+
+# Set npm to install globally into /app/.npm-global
+ENV NPM_CONFIG_PREFIX=/app/.npm-global
+ENV PATH="/app/.npm-global/bin:/app/.local/bin:$PATH"
+
+# Install anythingllm-mcp-server into /app/.npm-global
+# Also temporarily set HOME=/app so the Claude Code installer script
+# places the `claude` binary in `/app/.local/bin/claude` rather than `/home/claude`.
 RUN npm install -g anythingllm-mcp-server \
-    && curl -fsSL https://claude.ai/install.sh | bash
+    && HOME=/app curl -fsSL https://claude.ai/install.sh | bash
 
 COPY --from=builder /build/claude-runner /usr/local/bin/claude-runner
 
