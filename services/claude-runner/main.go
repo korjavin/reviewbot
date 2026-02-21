@@ -214,15 +214,20 @@ func seedClaudeConfig() {
 	if servers == nil {
 		servers = map[string]any{}
 	}
+
+	baseURL := os.Getenv("ANYTHINGLLM_URL")
+	if baseURL == "" {
+		baseURL = "http://anythingllm:3001"
+	}
+
 	servers["anythingllm"] = map[string]any{
 		"type":    "stdio",
 		"command": "anythingllm-mcp-server",
 		"env": map[string]string{
-			// Use ${VAR} expansion — native Claude Code resolves these at runtime
-			// when spawning the MCP process, so the container ENV is always picked up
-			// correctly even if the volume was seeded before the env vars were set.
-			"ANYTHINGLLM_API_KEY":  "${ANYTHINGLLM_API_KEY}",
-			"ANYTHINGLLM_BASE_URL": "${ANYTHINGLLM_URL:-http://anythingllm:3001}",
+			// Inject actual environment variable values directly into the config.
+			// Relying on Claude to expand ${VAR} seems to fail in some versions.
+			"ANYTHINGLLM_API_KEY":  os.Getenv("ANYTHINGLLM_API_KEY"),
+			"ANYTHINGLLM_BASE_URL": baseURL,
 		},
 	}
 	existing["mcpServers"] = servers
