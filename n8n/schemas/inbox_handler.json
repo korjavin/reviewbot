@@ -83,7 +83,7 @@
         "sendBody": true,
         "contentType": "json",
         "specifyBody": "json",
-        "jsonBody": "={ \"body\": \"🤖 **ReviewBot** is on it! I'm analyzing `{{ $json.owner }}/{{ $json.repo }}` for security improvements.\\n\\nThis may take a few minutes. I'll open a Pull Request with CI checks when done.\" }",
+        "jsonBody": "={ \"body\": \"🤖 **ReviewBot** is on it! I'm analyzing `{{ $json.owner }}/{{ $json.repo }}` for security improvements.\\n\\nThis may take a few minutes. I'll open a Pull Request with security improvements when done — these may include CI checks and/or security-focused tests that expose vulnerabilities (RED tests).\" }",
         "options": { "timeout": 10000 }
       },
       "notes": "Posts an immediate acknowledgement comment to the issue/PR so the user knows the bot is working."
@@ -95,9 +95,9 @@
       "typeVersion": 2,
       "position": [1500, 300],
       "parameters": {
-        "jsCode": "const ctx = $('Sanitize').first().json;\nconst ts = new Date().toISOString().replace(/[-:]/g, '').substring(0, 15);\nconst docName = `${ctx.repo}-${ts}-understanding`;\n\nconst prompt = `You are a security-focused code reviewer analyzing the repository ${ctx.owner}/${ctx.repo}.\n\nIMPORTANT: First call initialize_anythingllm with no arguments to enable knowledge base access.\n\nSTEP 1 — Check existing knowledge:\nSearch the AnythingLLM knowledge base for any existing analysis of this repository:\n- Search for \"${ctx.repo}\" and \"${ctx.owner}/${ctx.repo}\"\n- If you find previous analysis documents, read them for context and note what is already known\n\nSTEP 2 — Analyze the codebase:\nExamine the code in the current directory. Focus on:\n- Main programming language(s) and framework versions\n- Service architecture (web servers, databases, external APIs, queues, etc.)\n- CI/CD setup: check .github/workflows/, Makefile, Dockerfile, etc.\n- Authentication and authorization patterns\n- Data handling: what sensitive data is stored and how\n- Key security attack surfaces\n\nSTEP 3 — Store findings:\nStore your analysis in AnythingLLM using a document named \"${docName}\" containing:\n- Detected languages and key frameworks\n- Architecture overview\n- Existing CI/CD tooling\n- Top security-relevant observations\n\nSTEP 4 — Output summary:\nOutput a concise markdown summary covering the tech stack, architecture, and top 3-5 security-relevant observations.`;\n\nreturn [{ json: { ...ctx, prompt, doc_name: docName } }];"
+        "jsCode": "const ctx = $('Sanitize').first().json;\nconst ts = new Date().toISOString().replace(/[-:]/g, '').substring(0, 15);\nconst docName = `${ctx.repo}-${ts}-understanding`;\n\nconst prompt = `You are a security-focused code reviewer analyzing the repository ${ctx.owner}/${ctx.repo}.\n\nIMPORTANT: First call initialize_anythingllm with no arguments to enable knowledge base access.\n\nSTEP 1 — Check existing knowledge:\nSearch the AnythingLLM knowledge base for any existing analysis of this repository:\n- Search for \"${ctx.repo}\" and \"${ctx.owner}/${ctx.repo}\"\n- If you find previous analysis documents, read them for context and note what is already known\n\nSTEP 2 — Analyze the codebase:\nExamine the code in the current directory. Focus on:\n- Main programming language(s) and framework versions\n- Service architecture (web servers, databases, external APIs, queues, etc.)\n- CI/CD setup: check .github/workflows/, Makefile, Dockerfile, etc.\n- Existing test framework and test directory structure (look for *_test.go, *.test.ts, test_*.py, spec files, etc.)\n- Authentication and authorization patterns\n- Data handling: what sensitive data is stored and how\n- Key security attack surfaces and vulnerable code patterns\n\nSTEP 3 — Store findings:\nStore your analysis in AnythingLLM using a document named \"${docName}\" containing:\n- Detected languages and key frameworks\n- Architecture overview\n- Existing CI/CD tooling\n- Existing test framework and test directory\n- Top security-relevant observations and specific vulnerable code locations\n\nSTEP 4 — Output summary:\nOutput a concise markdown summary covering the tech stack, architecture, test setup, and top 3-5 security-relevant observations including specific code locations where vulnerabilities may exist.`;\n\nreturn [{ json: { ...ctx, prompt, doc_name: docName } }];"
       },
-      "notes": "Constructs the prompt for the 'general understanding' claude-runner step.\nThe prompt instructs claude to check AnythingLLM for prior analysis and store findings."
+      "notes": "Constructs the prompt for the 'general understanding' claude-runner step.\nNow also captures test framework and directory, and specific vulnerable code locations."
     },
     {
       "id": "node-general-understanding",
@@ -124,18 +124,18 @@
     },
     {
       "id": "node-build-find-checks-prompt",
-      "name": "Build Find Checks Prompt",
+      "name": "Build Find Improvements Prompt",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [2020, 300],
       "parameters": {
-        "jsCode": "const ctx = $('Sanitize').first().json;\nconst understanding = $input.first().json.review ?? '';\n\nconst prompt = `You are a CI/CD security advisor for the repository ${ctx.owner}/${ctx.repo}.\n\nIMPORTANT: First call initialize_anythingllm with no arguments.\n\nContext from the general understanding step:\n${understanding.substring(0, 3000)}\n\nSearch AnythingLLM for:\n1. The understanding document for this repo (search \"${ctx.repo} understanding\")\n2. Relevant security intel for the detected language and framework\n\nBased on the codebase analysis and security knowledge, identify exactly 2-3 CI checks that would provide the highest security and quality value. Each check must:\n- Be appropriate for the detected primary language\n- Be implementable as a GitHub Actions workflow step\n- NOT already exist in the current CI configuration\n- Provide clear security or quality value\n\nCRITICAL OUTPUT FORMAT:\nOutput ONLY a valid JSON array — no markdown, no prose, no code fences:\n[\n  {\n    \"name\": \"check-identifier-slug\",\n    \"description\": \"What this check does and exactly how to implement it\",\n    \"reason\": \"Why this specific repo needs this check right now\"\n  }\n]`;\n\nreturn [{ json: { ...ctx, prompt } }];"
+        "jsCode": "const ctx = $('Sanitize').first().json;\nconst understanding = $input.first().json.review ?? '';\n\nconst prompt = `You are a security advisor for the repository ${ctx.owner}/${ctx.repo}.\n\nIMPORTANT: First call initialize_anythingllm with no arguments.\n\nContext from the general understanding step:\n${understanding.substring(0, 3000)}\n\nSearch AnythingLLM for:\n1. The understanding document for this repo (search \"${ctx.repo} understanding\")\n2. Relevant security intel for the detected language and framework\n\nBased on the codebase analysis and security knowledge, identify exactly 2-3 security improvements that would provide the highest value. Each improvement must be one of:\n\n**Type A — ci_check**: A new GitHub Actions workflow step that statically detects a vulnerability class (linter, scanner, audit, SAST, etc.). Choose this when the gap is best caught automatically at CI time.\n\n**Type B — security_test**: A failing test written in the repo's own test framework that *demonstrates* a specific vulnerability exists in the application code. The test is intentionally RED — it asserts the secure behavior, but the current code is insecure so the test will fail. This is TDD red-green for security: the developer makes it pass by fixing the vulnerability. Choose this when there is specific vulnerable application logic that can be exercised with a test.\n\nRules:\n- Be appropriate for the detected primary language, framework, and test setup\n- NOT already exist in the current CI/test configuration\n- Provide clear, specific security value — avoid generic advice\n- For security_test: you MUST have identified a specific vulnerable code location\n\nCRITICAL OUTPUT FORMAT:\nOutput ONLY a valid JSON array — no markdown, no prose, no code fences:\n[\n  {\n    \"name\": \"check-identifier-slug\",\n    \"type\": \"ci_check\",\n    \"description\": \"What this check does and exactly how to implement it as a workflow step\",\n    \"reason\": \"Why this specific repo needs this check right now\"\n  },\n  {\n    \"name\": \"test-identifier-slug\",\n    \"type\": \"security_test\",\n    \"description\": \"Exact vulnerability to expose: which file/function is vulnerable, what the test should send as input, and what secure behavior it should assert\",\n    \"reason\": \"Why this vulnerability is dangerous and what harm an attacker could cause\"\n  }\n]`;\n\nreturn [{ json: { ...ctx, prompt } }];"
       },
-      "notes": "Constructs the prompt to find 2-3 high-value CI checks to implement."
+      "notes": "Constructs the prompt to find 2-3 security improvements: CI checks and/or RED security tests.\nOutput schema includes 'type' field: ci_check | security_test."
     },
     {
       "id": "node-find-ci-checks",
-      "name": "Find CI Checks",
+      "name": "Find Security Improvements",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [2280, 300],
@@ -154,7 +154,7 @@
         "jsonBody": "={\n  \"owner\": {{ JSON.stringify($json.owner) }},\n  \"repo\": {{ JSON.stringify($json.repo) }},\n  \"pr_number\": {{ $json.pr_number }},\n  \"workdir\": {{ JSON.stringify($json.repo_path) }},\n  \"prompt\": {{ JSON.stringify($json.prompt) }}\n}",
         "options": { "timeout": 660000 }
       },
-      "notes": "Runs claude to identify 2-3 CI checks to implement.\nExpects JSON array output: [{name, description, reason}, ...]"
+      "notes": "Runs claude to identify 2-3 security improvements (CI checks and/or RED security tests).\nExpects JSON array output: [{name, type, description, reason}, ...]"
     },
     {
       "id": "node-parse-checks",
@@ -163,9 +163,9 @@
       "typeVersion": 2,
       "position": [2540, 300],
       "parameters": {
-        "jsCode": "const ctx = $('Sanitize').first().json;\nconst raw = $input.first().json.review ?? '';\n\n// Claude may wrap JSON in markdown code fences — extract the array.\nlet checks;\ntry {\n  const jsonMatch = raw.match(/\\[[\\s\\S]*\\]/);\n  checks = JSON.parse(jsonMatch ? jsonMatch[0] : raw);\n  if (!Array.isArray(checks)) throw new Error('not an array');\n} catch (e) {\n  // Fallback: single generic check so the pipeline always continues.\n  console.log('WARN: could not parse checks JSON, using fallback. Raw output:', raw.substring(0, 500));\n  checks = [{\n    name: 'dependency-audit',\n    description: 'Add a dependency vulnerability audit step using the language-appropriate tool',\n    reason: 'No automated dependency vulnerability scanning detected in CI'\n  }];\n}\n\n// Cap at 3 checks.\nchecks = checks.slice(0, 3);\n\n// Emit one item per check, each carrying the full pipeline context.\nreturn checks.map(check => ({\n  json: {\n    owner: ctx.owner,\n    repo: ctx.repo,\n    pr_number: ctx.pr_number,\n    github_token: ctx.github_token,\n    repo_path: ctx.repo_path,\n    branch: ctx.branch,\n    default_branch: ctx.default_branch,\n    check_name: check.name,\n    check_description: check.description,\n    check_reason: check.reason\n  }\n}));"
+        "jsCode": "const ctx = $('Sanitize').first().json;\nconst raw = $input.first().json.review ?? '';\n\n// Claude may wrap JSON in markdown code fences — extract the array.\nlet checks;\ntry {\n  const jsonMatch = raw.match(/\\[[\\s\\S]*\\]/);\n  checks = JSON.parse(jsonMatch ? jsonMatch[0] : raw);\n  if (!Array.isArray(checks)) throw new Error('not an array');\n} catch (e) {\n  // Fallback: single generic CI check so the pipeline always continues.\n  console.log('WARN: could not parse checks JSON, using fallback. Raw output:', raw.substring(0, 500));\n  checks = [{\n    name: 'dependency-audit',\n    type: 'ci_check',\n    description: 'Add a dependency vulnerability audit step using the language-appropriate tool',\n    reason: 'No automated dependency vulnerability scanning detected in CI'\n  }];\n}\n\n// Cap at 3 improvements.\nchecks = checks.slice(0, 3);\n\n// Emit one item per improvement, each carrying the full pipeline context.\nreturn checks.map(check => ({\n  json: {\n    owner: ctx.owner,\n    repo: ctx.repo,\n    pr_number: ctx.pr_number,\n    github_token: ctx.github_token,\n    repo_path: ctx.repo_path,\n    branch: ctx.branch,\n    default_branch: ctx.default_branch,\n    check_name: check.name,\n    check_type: check.type || 'ci_check',\n    check_description: check.description,\n    check_reason: check.reason\n  }\n}));"
       },
-      "notes": "Parses the JSON array of CI checks from the Find CI Checks step.\nEmits one item per check — each item carries full pipeline context for the loop."
+      "notes": "Parses the JSON array of security improvements from the Find step.\nEach item has check_type: 'ci_check' | 'security_test'.\nEmits one item per improvement — each carries full pipeline context for the loop."
     },
     {
       "id": "node-loop-over-checks",
@@ -177,7 +177,7 @@
         "batchSize": 1,
         "options": {}
       },
-      "notes": "Iterates over each CI check one at a time (sequential commits).\nOutput 0 (done) → Create PR\nOutput 1 (batch) → Build Implement Prompt"
+      "notes": "Iterates over each security improvement one at a time (sequential commits).\nOutput 0 (done) → Create PR\nOutput 1 (batch) → Build Implement Prompt"
     },
     {
       "id": "node-build-implement-prompt",
@@ -186,9 +186,9 @@
       "typeVersion": 2,
       "position": [2800, 540],
       "parameters": {
-        "jsCode": "const item = $input.first().json;\n\nconst prompt = `You are a CI/CD security engineer implementing checks for the repository ${item.owner}/${item.repo}.\n\nIMPORTANT: First call initialize_anythingllm with no arguments.\n\nSearch AnythingLLM for relevant intel about implementing \"${item.check_name}\" and any related security patterns.\n\nYou need to implement this CI check:\n- Name: ${item.check_name}\n- Description: ${item.check_description}\n- Reason: ${item.check_reason}\n\nThe repository code is in the current directory. A review branch has already been created.\n\nInstructions:\n1. Examine the existing CI configuration in .github/workflows/\n2. Determine the correct implementation approach for this repo's language and CI setup\n3. Create or modify workflow files as needed\n4. Add any required configuration files (e.g. .golangci.yml, .semgrepignore, etc.)\n5. Configure the check to run on: push to main/master AND pull_request events\n\nAfter implementing, commit with:\n  git add -A\n  git commit -m \"ci: add ${item.check_name}\\n\\nWhy: ${item.check_reason}\"\n\nThe commit message MUST contain a 'Why:' line explaining the security benefit.\nDo NOT push — commit only.\n\nOutput a brief summary of what was implemented and what the commit hash is.`;\n\nreturn [{ json: { ...item, prompt } }];"
+        "jsCode": "const item = $input.first().json;\n\nlet prompt;\n\nif (item.check_type === 'security_test') {\n  prompt = `You are a security engineer writing RED security tests for the repository ${item.owner}/${item.repo}.\n\nIMPORTANT: First call initialize_anythingllm with no arguments.\n\nSearch AnythingLLM for relevant intel about the vulnerability \"${item.check_name}\" and any related test patterns.\n\nYou need to write a security test that demonstrates this vulnerability exists:\n- Name: ${item.check_name}\n- Description: ${item.check_description}\n- Reason: ${item.check_reason}\n\nThis is a RED test in TDD terms — it MUST FAIL on the current code because the vulnerability is present.\nThe test documents the security gap: when a developer fixes the vulnerability, the test turns GREEN.\nDo NOT fix the vulnerable code — only add the test.\n\nThe repository code is in the current directory. A review branch has already been created.\n\nInstructions:\n1. Identify the existing test framework and test directory (look for *_test.go, *.test.ts, test_*.py, spec files, etc.)\n2. Locate the specific code that contains the vulnerability described above\n3. Write a test that:\n   - Exercises the vulnerable code path with a security-relevant input (e.g. SQL injection string, path traversal, auth bypass attempt)\n   - Asserts the SECURE outcome (e.g. returns error not data, returns 401 not 200, rejects input)\n   - Will FAIL on the current code because it is insecure\n   - Starts with a prominent comment block:\n       // SECURITY RED TEST: ${item.check_name}\n       // This test is intentionally FAILING — it documents a security vulnerability.\n       // It will pass once the underlying code is fixed.\n       // Vulnerability: ${item.check_reason}\n4. Place the test in the appropriate existing test file or create a new one named with a security suffix\n   (e.g. auth_security_test.go, security.test.ts, test_security_auth.py)\n5. Verify your understanding: mentally trace through the current code to confirm the test will indeed fail\n\nAfter implementing, commit with:\n  git add -A\n  git commit -m \"test(security): expose ${item.check_name}\\n\\nWhy: ${item.check_reason}\\n\\nNOTE: This test is intentionally RED (failing). It documents a security\\nvulnerability in the current code. Fix the underlying code to make it pass.\"\n\nDo NOT push — commit only.\n\nOutput a brief summary: which file was created/modified, what input the test uses, what it asserts, and why it currently fails.`;\n\n} else {\n  // ci_check (default)\n  prompt = `You are a CI/CD security engineer implementing checks for the repository ${item.owner}/${item.repo}.\n\nIMPORTANT: First call initialize_anythingllm with no arguments.\n\nSearch AnythingLLM for relevant intel about implementing \"${item.check_name}\" and any related security patterns.\n\nYou need to implement this CI check:\n- Name: ${item.check_name}\n- Description: ${item.check_description}\n- Reason: ${item.check_reason}\n\nThe repository code is in the current directory. A review branch has already been created.\n\nInstructions:\n1. Examine the existing CI configuration in .github/workflows/\n2. Determine the correct implementation approach for this repo's language and CI setup\n3. Create or modify workflow files as needed\n4. Add any required configuration files (e.g. .golangci.yml, .semgrepignore, etc.)\n5. Configure the check to run on: push to main/master AND pull_request events\n\nAfter implementing, commit with:\n  git add -A\n  git commit -m \"ci: add ${item.check_name}\\n\\nWhy: ${item.check_reason}\"\n\nThe commit message MUST contain a 'Why:' line explaining the security benefit.\nDo NOT push — commit only.\n\nOutput a brief summary of what was implemented and what the commit hash is.`;\n}\n\nreturn [{ json: { ...item, prompt } }];"
       },
-      "notes": "Builds the implementation prompt for the current check in the loop.\nInstructs claude to commit (but not push) the change."
+      "notes": "Builds the implementation prompt for the current improvement in the loop.\nBranches on check_type: security_test → RED test prompt, ci_check → workflow prompt.\nInstructs claude to commit (but not push) the change."
     },
     {
       "id": "node-implement-check",
@@ -211,7 +211,7 @@
         "jsonBody": "={\n  \"owner\": {{ JSON.stringify($json.owner) }},\n  \"repo\": {{ JSON.stringify($json.repo) }},\n  \"pr_number\": {{ $json.pr_number }},\n  \"workdir\": {{ JSON.stringify($json.repo_path) }},\n  \"prompt\": {{ JSON.stringify($json.prompt) }}\n}",
         "options": { "timeout": 660000 }
       },
-      "notes": "Runs claude to implement one CI check.\nclaude commits changes locally; does NOT push.\nTimeout: 11 min per check."
+      "notes": "Runs claude to implement one security improvement (CI check or RED test).\nclaude commits changes locally; does NOT push.\nTimeout: 11 min per improvement."
     },
     {
       "id": "node-create-pr",
@@ -231,7 +231,7 @@
         "sendBody": true,
         "contentType": "json",
         "specifyBody": "json",
-        "jsonBody": "={\n  \"owner\": {{ JSON.stringify($('Sanitize').first().json.owner) }},\n  \"repo\": {{ JSON.stringify($('Sanitize').first().json.repo) }},\n  \"github_token\": {{ JSON.stringify($('Sanitize').first().json.github_token) }},\n  \"repo_path\": {{ JSON.stringify($('Sanitize').first().json.repo_path) }},\n  \"branch\": {{ JSON.stringify($('Sanitize').first().json.branch) }},\n  \"base\": {{ JSON.stringify($('Sanitize').first().json.default_branch) }},\n  \"title\": {{ JSON.stringify('reviewbot: add security CI checks to ' + $('Sanitize').first().json.owner + '/' + $('Sanitize').first().json.repo) }},\n  \"body\": \"## 🤖 ReviewBot Security CI Checks\\n\\nThis PR adds automated security checks to your CI pipeline.\\n\\nEach check was selected based on:\\n- Analysis of this repository's tech stack and architecture\\n- ReviewBot's security knowledge base (intel library)\\n- Existing CI gaps found during code review\\n\\n### What's included\\n\\nSee the individual commits for details — each commit message explains **why** that specific check was added.\\n\\n---\\n_Generated by [ReviewBot](https://github.com/korjavin/reviewbot)_\"\n}",
+        "jsonBody": "={\n  \"owner\": {{ JSON.stringify($('Sanitize').first().json.owner) }},\n  \"repo\": {{ JSON.stringify($('Sanitize').first().json.repo) }},\n  \"github_token\": {{ JSON.stringify($('Sanitize').first().json.github_token) }},\n  \"repo_path\": {{ JSON.stringify($('Sanitize').first().json.repo_path) }},\n  \"branch\": {{ JSON.stringify($('Sanitize').first().json.branch) }},\n  \"base\": {{ JSON.stringify($('Sanitize').first().json.default_branch) }},\n  \"title\": {{ JSON.stringify('reviewbot: security improvements for ' + $('Sanitize').first().json.owner + '/' + $('Sanitize').first().json.repo) }},\n  \"body\": \"## 🤖 ReviewBot Security Improvements\\n\\nThis PR adds targeted security improvements based on analysis of your repository's code, architecture, and existing CI setup.\\n\\nImprovements may include:\\n- **CI checks** — new GitHub Actions steps that automatically detect vulnerability classes\\n- **Security RED tests** — tests written in your existing test framework that *intentionally fail* because they expose a real vulnerability in the current code\\n\\n### About RED tests\\n\\nA RED test asserts the **secure behavior** — but the current code is insecure, so the test fails. This is the TDD red-green cycle applied to security:\\n1. The test documents exactly what is broken and why it matters\\n2. You fix the underlying code\\n3. The test turns GREEN\\n\\nSee the individual commits for details — each commit message explains **why** that specific improvement was added.\\n\\n---\\n_Generated by [ReviewBot](https://github.com/korjavin/reviewbot)_\"\n}",
         "options": { "timeout": 30000 }
       },
       "notes": "Pushes the review branch and opens a GitHub PR.\nReturns: { pr_url, pr_number }"
@@ -257,10 +257,10 @@
         "sendBody": true,
         "contentType": "json",
         "specifyBody": "json",
-        "jsonBody": "={ \"body\": \"✅ **ReviewBot** is done!\\n\\nI've opened a Pull Request with security CI checks:\\n👉 {{ $json.pr_url }}\\n\\nEach commit explains **why** that check was added. Review, adjust, and merge when ready!\" }",
+        "jsonBody": "={ \"body\": \"✅ **ReviewBot** is done!\\n\\nI've opened a Pull Request with security improvements:\\n👉 {{ $json.pr_url }}\\n\\nThe PR may include **CI checks** and/or **RED security tests** — tests that fail on purpose because they expose a real vulnerability. Each commit explains **why** that improvement was added.\\n\\nFor RED tests: fix the underlying code and the test will turn green. Review, adjust, and merge when ready!\" }",
         "options": { "timeout": 10000 }
       },
-      "notes": "Posts the PR link back to the original issue/PR comment thread."
+      "notes": "Posts the PR link back to the original issue/PR comment thread.\nMentions RED tests concept so the owner understands intentionally failing tests."
     }
   ],
   "connections": {
@@ -296,15 +296,15 @@
     },
     "General Understanding": {
       "main": [
-        [{ "node": "Build Find Checks Prompt", "type": "main", "index": 0 }]
+        [{ "node": "Build Find Improvements Prompt", "type": "main", "index": 0 }]
       ]
     },
-    "Build Find Checks Prompt": {
+    "Build Find Improvements Prompt": {
       "main": [
-        [{ "node": "Find CI Checks", "type": "main", "index": 0 }]
+        [{ "node": "Find Security Improvements", "type": "main", "index": 0 }]
       ]
     },
-    "Find CI Checks": {
+    "Find Security Improvements": {
       "main": [
         [{ "node": "Parse Checks", "type": "main", "index": 0 }]
       ]
