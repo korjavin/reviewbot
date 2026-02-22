@@ -157,12 +157,32 @@ services:
     depends_on:
       - anythingllm
 
+  # ──────────────────────────────────────────────
+  # Gemini Runner — AI code review engine (Google)
+  # Accepts POST /review from n8n, runs `gemini` CLI,
+  # and returns the review text.
+  # ──────────────────────────────────────────────
+  gemini-runner:
+    image: ghcr.io/korjavin/reviewbot-gemini-runner:latest
+    container_name: gemini-runner
+    restart: unless-stopped
+    networks:
+      - traefik_network
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-${LLM_API_KEY}}
+    volumes:
+      # Persist the /home/gemini dir so gemini CLI config survives restarts.
+      - gemini-home:/home/gemini
+      # Shared volume: receives pre-cloned repos from reviewbot's /git/checkout
+      - shared-repos:/shared
+
 volumes:
   n8n-data:
   anythingllm-data:
   kb-maintainer-state:
   claude-home:
-  # Shared volume: reviewbot checks out repos here; claude-runner runs agents here.
+  gemini-home:
+  # Shared volume: reviewbot checks out repos here; claude-runner/gemini-runner run agents here.
   # Both containers mount this at /shared (reviewbot uses /shared/repos).
   shared-repos:
 
