@@ -7,6 +7,7 @@ import (
 
 	"github.com/korjavin/reviewbot/internal/config"
 	ghwebhook "github.com/korjavin/reviewbot/internal/github"
+	"github.com/korjavin/reviewbot/internal/handler"
 	"github.com/korjavin/reviewbot/internal/middleware"
 	"github.com/korjavin/reviewbot/internal/oauth"
 )
@@ -18,8 +19,19 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+
+	// GitHub webhook receiver.
 	mux.HandleFunc("POST /webhook", ghwebhook.NewWebhookHandler(cfg))
+
+	// OAuth callback (app installation flow).
 	mux.HandleFunc("GET /callback", oauth.NewCallbackHandler(cfg))
+
+	// Git operations used by the n8n pipeline.
+	// POST /git/checkout — clone repo to shared volume, create review branch.
+	mux.HandleFunc("POST /git/checkout", handler.HandleCheckout(cfg.SharedReposDir))
+	// POST /git/create-pr — push review branch and open a GitHub PR.
+	mux.HandleFunc("POST /git/create-pr", handler.HandleCreatePR())
+
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"ok"}`))

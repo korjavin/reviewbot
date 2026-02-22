@@ -24,7 +24,10 @@ type ReviewRequest struct {
 	Owner       string `json:"owner"`
 	Repo        string `json:"repo"`
 	PRNumber    int    `json:"pr_number"`
-	// Optional: override the default prompt.
+	// Workdir: if set, skip cloning and run claude in this pre-cloned directory.
+	// The directory is NOT deleted after the run (caller manages lifecycle).
+	Workdir string `json:"workdir,omitempty"`
+	// Prompt: if set, overrides the default review prompt.
 	Prompt string `json:"prompt,omitempty"`
 }
 
@@ -75,36 +78,54 @@ func handleReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Owner == "" || req.Repo == "" || req.GitHubToken == "" {
-		http.Error(w, "owner, repo, and github_token are required", http.StatusBadRequest)
+	if req.Owner == "" || req.Repo == "" {
+		http.Error(w, "owner and repo are required", http.StatusBadRequest)
 		return
 	}
 
-	slog.Info("review job started", "owner", req.Owner, "repo", req.Repo, "pr", req.PRNumber)
+	slog.Info("review job started", "owner", req.Owner, "repo", req.Repo, "pr", req.PRNumber, "workdir", req.Workdir)
 
-	tmpDir, err := os.MkdirTemp("", "claude-runner-*")
-	if err != nil {
-		slog.Error("temp dir creation failed", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	defer os.RemoveAll(tmpDir)
-	slog.Debug("temp dir created", "dir", tmpDir)
+	var workDir string
 
-	// Clone the repo with a shallow depth to keep it fast.
-	cloneURL := fmt.Sprintf("https://x-access-token:%s@github.com/%s/%s.git",
-		req.GitHubToken, req.Owner, req.Repo)
-	cloneURLSafe := fmt.Sprintf("https://x-access-token:***@github.com/%s/%s.git", req.Owner, req.Repo)
-	slog.Debug("cloning repo", "url", cloneURLSafe, "dir", tmpDir)
-	gitCmd := exec.Command("git", "clone", "--depth=1", cloneURL, ".")
-	gitCmd.Dir = tmpDir
-	if out, err := gitCmd.CombinedOutput(); err != nil {
-		sanitized := strings.ReplaceAll(string(out), req.GitHubToken, "***")
-		slog.Error("git clone failed", "output", sanitized, "err", err)
-		http.Error(w, "clone failed", http.StatusInternalServerError)
-		return
+	if req.Workdir != "" {
+		// Use the pre-cloned directory — no cloning needed.
+		workDir = req.Workdir
+		if _, err := os.Stat(workDir); err != nil {
+			slog.Error("workdir not found", "dir", workDir, "err", err)
+			http.Error(w, "workdir not found", http.StatusBadRequest)
+			return
+		}
+		slog.Debug("using pre-cloned workdir", "dir", workDir)
 	} else {
-		slog.Debug("git clone succeeded", "output", strings.ReplaceAll(string(out), req.GitHubToken, "***"))
+		// No workdir provided — clone into a temp directory.
+		if req.GitHubToken == "" {
+			http.Error(w, "github_token is required when workdir is not set", http.StatusBadRequest)
+			return
+		}
+		tmpDir, err := os.MkdirTemp("", "claude-runner-*")
+		if err != nil {
+			slog.Error("temp dir creation failed", "err", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		defer os.RemoveAll(tmpDir)
+		workDir = tmpDir
+		slog.Debug("temp dir created", "dir", workDir)
+
+		cloneURL := fmt.Sprintf("https://x-access-token:%s@github.com/%s/%s.git",
+			req.GitHubToken, req.Owner, req.Repo)
+		cloneURLSafe := fmt.Sprintf("https://x-access-token:***@github.com/%s/%s.git", req.Owner, req.Repo)
+		slog.Debug("cloning repo", "url", cloneURLSafe, "dir", workDir)
+		gitCmd := exec.Command("git", "clone", "--depth=1", cloneURL, ".")
+		gitCmd.Dir = workDir
+		if out, err := gitCmd.CombinedOutput(); err != nil {
+			sanitized := strings.ReplaceAll(string(out), req.GitHubToken, "***")
+			slog.Error("git clone failed", "output", sanitized, "err", err)
+			http.Error(w, "clone failed", http.StatusInternalServerError)
+			return
+		} else {
+			slog.Debug("git clone succeeded", "output", strings.ReplaceAll(string(out), req.GitHubToken, "***"))
+		}
 	}
 
 	prompt := req.Prompt
@@ -119,9 +140,9 @@ func handleReview(w http.ResponseWriter, r *http.Request) {
 	// Run claude in non-interactive print mode.
 	// --dangerously-skip-permissions: required for headless use (no TTY to confirm tool calls).
 	cmdArgs := []string{"-p", prompt, "--dangerously-skip-permissions"}
-	slog.Debug("running claude", "args", cmdArgs, "dir", tmpDir)
+	slog.Debug("running claude", "args", cmdArgs, "dir", workDir)
 	claudeCmd := exec.CommandContext(ctx, "/app/bin/claude", cmdArgs...)
-	claudeCmd.Dir = tmpDir
+	claudeCmd.Dir = workDir
 	// Prevent update checks and telemetry in headless mode.
 	claudeCmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
 
@@ -131,13 +152,13 @@ func handleReview(w http.ResponseWriter, r *http.Request) {
 	claudeCmd.Stdout = multiWriter
 	claudeCmd.Stderr = multiWriter
 
-	err = claudeCmd.Run()
+	claudeErr := claudeCmd.Run()
 	out := outBuf.Bytes()
 
-	if err != nil {
+	if claudeErr != nil {
 		// Log the full output so we can see what claude actually complained about.
 		slog.Error("claude run failed",
-			"err", err,
+			"err", claudeErr,
 			"owner", req.Owner, "repo", req.Repo, "pr", req.PRNumber,
 			"output", string(out),
 		)

@@ -19,6 +19,10 @@ type Config struct {
 	// N8NWebhookURL is the n8n webhook endpoint that receives review jobs.
 	// When set, @reviewbot mentions are forwarded there instead of replying inline.
 	N8NWebhookURL string
+	// SharedReposDir is the root of the shared volume where repos are checked out.
+	// Must be accessible to both reviewbot and claude-runner containers.
+	// Default: /shared/repos
+	SharedReposDir string
 }
 
 func Load() (*Config, error) {
@@ -53,6 +57,11 @@ func Load() (*Config, error) {
 		port = "8080"
 	}
 
+	sharedReposDir := os.Getenv("SHARED_REPOS_DIR")
+	if sharedReposDir == "" {
+		sharedReposDir = "/shared/repos"
+	}
+
 	return &Config{
 		AppID:          appID,
 		PrivateKeyPath: privateKeyPath,
@@ -63,6 +72,7 @@ func Load() (*Config, error) {
 		Port:           port,
 		BaseURL:        os.Getenv("BASE_URL"),
 		N8NWebhookURL:  os.Getenv("N8N_WEBHOOK_URL"),
+		SharedReposDir: sharedReposDir,
 	}, nil
 }
 

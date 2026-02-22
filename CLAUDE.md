@@ -1,12 +1,23 @@
-# ReviewBot — GitHub App Bot
+# ReviewBot — AI Security Review Pipeline
 
-GitHub App bot that reacts to PR and comment events with ping-pong responses (PoC stage).
+AI-powered security review bot. When @reviewbot is mentioned on a GitHub PR or issue, it:
+1. Clones the repo, runs claude to understand it and find CI gaps
+2. Implements 2-3 targeted CI checks with clear "Why:" commit messages
+3. Opens a Pull Request with those checks in the target repository
 
-## Architecture
+See `ARCHITECTURE.md` for full system design.
 
-GitHub webhooks → Go HTTP server → GitHub API responses
+## Zone of Responsibility
 
-The bot authenticates as a GitHub App installation using JWT + private key (via `ghinstallation`).
+- **reviewbot** (this service): GitHub operations — webhook ingestion, auth, `/git/checkout`, `/git/create-pr`
+- **claude-runner**: AI agent — runs `claude` CLI with a prompt, returns output; supports `workdir` for pre-cloned repos
+- **n8n**: Orchestration — pipeline steps and prompts live here; no redeploy to change behaviour
+- **anythingllm**: Knowledge Base — intel library + per-repo analysis documents
+- **kb-maintainer**: Keeps `./intels/*.md` synced to AnythingLLM
+
+## Architecture (short)
+
+GitHub webhooks → reviewbot → n8n `inbox_handler` → claude-runner (×3) → reviewbot → GitHub PR
 
 ## Build & Run
 
@@ -24,34 +35,47 @@ docker compose up --build
 ## Project Structure
 
 ```
-main.go                     — entry point, HTTP server
-internal/config/config.go   — configuration from env vars
-internal/github/client.go   — GitHub client factory (ghinstallation)
-internal/github/webhook.go  — webhook validation, parsing, routing
-internal/handler/ping.go    — ping event handler
-internal/handler/pullrequest.go — PR opened → comment
-internal/handler/comment.go — issue comment with @reviewbot → reply + reaction
-internal/oauth/oauth.go     — OAuth callback for app installation
+main.go                          — entry point, HTTP server, endpoint registration
+internal/config/config.go        — env-var config (incl. SharedReposDir)
+internal/github/client.go        — GitHub App client factory (ghinstallation)
+internal/github/webhook.go       — webhook validation, parsing, event routing
+internal/handler/handler.go      — ClientFactory / TransportFactory interfaces
+internal/handler/comment.go      — @reviewbot mention → dispatch job to n8n
+internal/handler/pullrequest.go  — PR opened (no-op; pipeline triggered by mention only)
+internal/handler/ping.go         — GitHub ping event handler
+internal/handler/github_ops.go   — POST /git/checkout and POST /git/create-pr
+internal/git/git.go              — low-level git helpers
+internal/middleware/logging.go   — request logging middleware
+internal/oauth/oauth.go          — OAuth callback for app installation
 
-services/kb-maintainer/     — KB Maintainer microservice (separate Go module)
-  main.go                   — entry point: watcher + ticker + signal handler
-  config.go                 — env-var config
-  client.go                 — AnythingLLM REST API client
-  sync.go                   — SyncFile / DeleteFile / FullSync
-  state.go                  — JSON state persistence + MD5 hashing
-  Dockerfile                — multi-stage build, non-root user
+services/claude-runner/          — AI agent runner (separate Go module)
+  main.go                        — POST /review: runs claude in workdir or clones fresh
+  Dockerfile
 
-intels/                     — markdown intel files (watched by kb-maintainer)
-docs/kb-maintainer/DESIGN.md — design doc for the KB Maintainer service
+services/kb-maintainer/          — KB Maintainer (separate Go module)
+  main.go / sync.go / state.go   — syncs intels/ → AnythingLLM workspace
+  Dockerfile
+
+n8n/schemas/
+  inbox_handler.json             — MAIN pipeline (import this into n8n)
+  claude-runner-test.json        — manual dev/test workflow
+  poc-review-pipeline.json       — legacy POC (superseded)
+
+intels/                          — markdown intel files (synced to AnythingLLM)
+docs/                            — design docs
 ```
 
 ## Endpoints
 
-- `POST /webhook` — GitHub webhook receiver
+- `POST /webhook` — GitHub webhook receiver (validates HMAC, routes events)
 - `GET /callback` — OAuth callback (app installation flow)
 - `GET /health` — health check
+- `POST /git/checkout` — clone repo to shared volume, create review branch
+- `POST /git/create-pr` — push review branch, open GitHub PR
 
 ## Environment Variables
+
+### reviewbot
 
 | Variable | Required | Description |
 |---|---|---|
@@ -63,8 +87,18 @@ docs/kb-maintainer/DESIGN.md — design doc for the KB Maintainer service
 | `GITHUB_CLIENT_SECRET` | no | OAuth Client Secret |
 | `PORT` | no | Server port (default: 8080) |
 | `BASE_URL` | no | Public URL for OAuth redirects |
+| `N8N_WEBHOOK_URL` | yes | n8n inbox_handler webhook URL |
+| `SHARED_REPOS_DIR` | no | Root dir for shared volume checkouts (default: `/shared/repos`) |
 
 *One of `GITHUB_PRIVATE_KEY_PATH` or `GITHUB_PRIVATE_KEY` is required.
+
+### claude-runner
+
+| Variable | Required | Description |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | yes | Anthropic API key for claude CLI |
+| `ANYTHINGLLM_URL` | no | AnythingLLM base URL (default: `http://anythingllm:3001`) |
+| `ANYTHINGLLM_API_KEY` | yes | AnythingLLM API key (for MCP config seeded into `~/.claude.json`) |
 
 ### KB Maintainer (`services/kb-maintainer`)
 

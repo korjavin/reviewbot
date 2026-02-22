@@ -1,277 +1,251 @@
-# ReviewBot — Architecture Overview
+# ReviewBot — Architecture
 
-> **Status**: Draft · February 2026  
-> **Goal**: Automatically analyse any GitHub repository for security vulnerabilities, generate lightweight CI checks, and open a Pull Request with those checks in the target repository.
-
----
-
-## Vision
-
-ReviewBot transforms from a simple webhook responder into a full **AI-powered security review pipeline**. When triggered (manually or on a new PR), the system:
-
-1. Checks out the target repository locally.
-2. Identifies relevant threat models from an internal **Knowledge Base**.
-3. Spawns focused AI agents, each examining one class of vulnerability.
-4. Generates CI/CD checks (GitHub Actions, etc.) for every confirmed finding.
-5. Opens a Pull Request in the target repository with those checks.
-
-Any subsequent commit to the repository runs only the **lightweight generated checks** — the expensive AI pipeline is only invoked again when a full re-review is requested.
+> **Status**: Active development · February 2026
+> **Goal**: Automatically analyse any GitHub repository for security vulnerabilities, generate lightweight CI checks, and open a Pull Request with those checks.
 
 ---
 
-## High-Level Components
+## Zones of Responsibility
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│                          ReviewBot System                          │
-│                                                                    │
-│  ┌──────────────┐    ┌──────────────────┐    ┌──────────────────┐ │
-│  │  GitHub App  │───▶│ Pipeline Engine  │───▶│   Knowledge Base │ │
-│  │  (Webhook)   │    │  (n8n-based)     │◀───│   (Intel Store)  │ │
-│  └──────────────┘    └────────┬─────────┘    └──────────────────┘ │
-│                               │                                    │
-│                    ┌──────────▼──────────┐                        │
-│                    │   AI Agents Layer   │                        │
-│                    │ (Gemini / Claude /  │                        │
-│                    │  local LLM)         │                        │
-│                    └──────────┬──────────┘                        │
-│                               │                                    │
-│                    ┌──────────▼──────────┐                        │
-│                    │  Output: PR with    │                        │
-│                    │  CI/CD Checks       │                        │
-│                    └─────────────────────┘                        │
-└────────────────────────────────────────────────────────────────────┘
-```
-
-### Services / Packages
-
-| # | Name | Role | Tech |
-|---|------|------|------|
-| 1 | **github-app** | Receives GitHub webhooks, authenticates as GitHub App, opens PRs | Go (existing) |
-| 2 | **knowledge-base** | Vector + semantic search over Intel documents | **AnythingLLM** (self-hosted) |
-| 3 | **kb-maintainer** | Watches `./intels/*.md` and keeps AnythingLLM workspace in sync | Go service (`services/kb-maintainer`) |
-| 4 | **pipeline-engine** | Orchestrates multi-step AI review workflow | n8n (self-hosted) |
-| 5 | **agent-runner** | Thin wrapper to invoke Gemini / Claude / local model with a prompt and return structured output | Go or n8n node |
+| Service | Role | Tech |
+|---------|------|------|
+| **reviewbot** | GitHub App: receives webhooks, authenticates as App, exposes git operations (`/git/checkout`, `/git/create-pr`) for n8n to call | Go |
+| **claude-runner** | AI code agent: runs `claude` CLI with a given prompt in a given directory, returns output | Go + Claude CLI |
+| **n8n** | Orchestrator: defines the pipeline steps, prompts, and control flow in a no-code/low-code environment | n8n (self-hosted) |
+| **anythingllm** | Knowledge Base (KB): stores intel files and per-repo analysis; queried by claude via MCP | AnythingLLM (self-hosted) |
+| **kb-maintainer** | Keeps `./intels/*.md` files synced into AnythingLLM workspace | Go |
 
 ---
 
-## Pipeline Execution Flow
+## System Overview
 
 ```
-[Trigger: PR opened / manual]
-        │
-        ▼
-1. CHECKOUT — clone target repo to ephemeral workspace
-        │
-        ▼
-2. PROFILING AGENT
-   Prompt: "Analyse this code. What services, frameworks,
-            languages and attack surfaces are present?"
-   Output: list of topics (e.g. "web-server", "sql", "github-actions")
-        │
-        ▼
-3. KNOWLEDGE BASE LOOKUP (parallel per topic)
-   → Search by tag / taxonomy path
-   → Return matching Intel documents
-        │
-        ▼
-4. REVIEW AGENTS (parallel, one per Intel)
-   Prompt: Intel document + relevant code snippets
-   Output: "Vulnerability confirmed / not applicable + evidence"
-        │
-        ▼
-5. CHECK GENERATOR AGENT
-   Prompt: list of confirmed findings
-   Output: GitHub Actions YAML / shell scripts implementing the checks
-        │
-        ▼
-6. PR CREATION
-   Commit generated checks to a new branch, open PR in target repo
+GitHub
+  │  webhook (PR comment mentioning @reviewbot)
+  ▼
+reviewbot (Go)
+  │  POST /webhook/reviewbot-inbox → n8n
+  ▼
+n8n — inbox_handler workflow
+  │
+  ├─ POST reviewbot /git/checkout        → clones repo to shared volume, creates branch
+  │
+  ├─ POST claude-runner /review          → "understand this repo" prompt
+  │       (reads/writes AnythingLLM KB via MCP)
+  │
+  ├─ POST claude-runner /review          → "find 2-3 CI checks" prompt
+  │
+  ├─ [loop per check]
+  │   └─ POST claude-runner /review      → "implement {check}, commit it" prompt
+  │
+  └─ POST reviewbot /git/create-pr       → pushes branch, opens GitHub PR
+          │
+          └─ POST GitHub API             → posts PR link to original comment
 ```
 
 ---
 
-## Repository Layout (Target)
+## inbox_handler Pipeline
+
+Triggered when someone comments `@reviewbot` on a GitHub PR or issue.
+
+| Step | Action | Notes |
+|------|--------|-------|
+| 1 | **Checkout** | Fresh isolated clone per review run (`/shared/repos/{owner}-{repo}-pr{N}-{ts}`), new branch `reviewbot-pr{N}-{ts}` |
+| 2 | **Sanitize** | No-op; future: malicious file scan, rate limiting |
+| 3 | **Acknowledge** | Immediate GitHub comment: "I'm on it" |
+| 4 | **General Understanding** | claude analyzes repo, checks KB for prior analysis, stores findings in AnythingLLM |
+| 5 | **Find CI Checks** | claude identifies 2-3 high-value checks not already present |
+| 6 | **Implement Checks** (loop) | claude implements each check, commits with "Why:" message |
+| 7 | **Create PR** | reviewbot pushes branch and opens GitHub PR |
+| 8 | **Notify** | GitHub comment with link to the new PR |
+
+---
+
+## Shared Volume
+
+Both `reviewbot` and `claude-runner` mount a Docker volume at `/shared`.
+
+- reviewbot's `POST /git/checkout` creates `/shared/repos/{owner}-{repo}-pr{N}-{ts}/`
+- n8n receives the path and passes it to subsequent `claude-runner` calls as `workdir`
+- claude-runner skips cloning when `workdir` is set; commits land in the shared volume
+- reviewbot's `POST /git/create-pr` pushes from that directory
 
 ```
-reviewbot/
-├── main.go
-├── internal/
-│   ├── config/
-│   ├── github/          ← existing webhook + API client
-│   ├── handler/         ← existing event handlers
-│   ├── git/             ← existing git helpers
-│   ├── middleware/
-│   └── oauth/
-│
-├── pkg/                 ← NEW: independent, reusable packages
-│   ├── knowledgebase/   ← KB client library (see docs/knowledgebase/)
-│   └── pipeline/        ← pipeline primitive types & interfaces
-│
-├── services/            ← standalone microservices
-│   └── kb-maintainer/   ← syncs ./intels → AnythingLLM workspace
-│
-├── n8n/                 ← NEW: n8n workflow definitions + custom nodes
-│   └── nodes/
-│
-└── docs/
-    ├── ARCHITECTURE.md  ← this file
-    ├── knowledgebase/
-    │   ├── REQUIREMENTS.md
-    │   └── DESIGN.md
-    └── pipeline/
-        └── REQUIREMENTS.md
+reviewbot container          claude-runner container
+  /shared/repos/               /shared/repos/
+    owner-repo-pr42-ts/          owner-repo-pr42-ts/  ← same physical volume
+      .github/workflows/           .github/workflows/
+      ...                          ...
 ```
 
 ---
 
-## Sub-documents
+## AnythingLLM as Knowledge Base
 
-| Document | Description |
+Two types of knowledge stored in AnythingLLM:
+
+| Type | Workspace | Content |
+|------|-----------|---------|
+| **Intel library** | `intels` | Security vulnerability patterns, best practices (in `./intels/*.md`) |
+| **Repo analysis** | `intels` (same, different docs) | Per-repo understanding docs: `{repo}-{ts}-understanding` |
+
+claude-runner has the `anythingllm-mcp-server` configured in `~/.claude.json`.
+Prompts instruct claude to:
+1. Search KB for existing repo analysis (to avoid re-doing work)
+2. Search KB for relevant intel (to guide the review)
+3. Store new findings after analysis
+
+---
+
+## Reviewbot API Endpoints
+
+| Endpoint | Description |
 |----------|-------------|
-| [knowledgebase/REQUIREMENTS.md](knowledgebase/REQUIREMENTS.md) | Original requirements for the Knowledge Base service (superseded by AnythingLLM) |
-| [knowledgebase/DESIGN.md](knowledgebase/DESIGN.md) | Original data model & storage evaluation (superseded by AnythingLLM) |
-| [kb-maintainer/DESIGN.md](kb-maintainer/DESIGN.md) | Design of the KB Maintainer sync service |
-| [pipeline/REQUIREMENTS.md](pipeline/REQUIREMENTS.md) | Requirements for the Pipeline Engine and its n8n custom nodes |
+| `POST /webhook` | GitHub webhook receiver (validates HMAC, routes events) |
+| `GET /callback` | OAuth callback (GitHub App installation flow) |
+| `GET /health` | Health check |
+| `POST /git/checkout` | Clones repo to shared volume, creates review branch |
+| `POST /git/create-pr` | Pushes review branch and opens a GitHub Pull Request |
+
+### `POST /git/checkout`
+
+```json
+// Request
+{ "owner": "...", "repo": "...", "github_token": "ghs_...", "pr_number": 42 }
+
+// Response
+{ "repo_path": "/shared/repos/owner-repo-pr42-20260222T153000Z", "branch": "reviewbot-pr42-20260222T153000Z", "default_branch": "main" }
+```
+
+### `POST /git/create-pr`
+
+```json
+// Request
+{ "repo_path": "/shared/repos/...", "owner": "...", "repo": "...", "github_token": "ghs_...", "branch": "reviewbot-pr42-...", "base": "main", "title": "...", "body": "..." }
+
+// Response
+{ "pr_url": "https://github.com/owner/repo/pull/43", "pr_number": 43 }
+```
+
+---
+
+## Claude-Runner API
+
+### `POST /review`
+
+```json
+// Request — with workdir (pre-cloned repo)
+{
+  "owner": "...", "repo": "...", "pr_number": 42,
+  "workdir": "/shared/repos/owner-repo-pr42-20260222T153000Z",
+  "prompt": "..."
+}
+
+// Request — without workdir (fresh clone)
+{
+  "owner": "...", "repo": "...", "pr_number": 42,
+  "github_token": "ghs_...",
+  "prompt": "..."
+}
+
+// Response
+{ "review": "...claude output as markdown..." }
+```
+
+When `workdir` is set, the directory is NOT deleted after the run (lifecycle managed by the pipeline).
 
 ---
 
 ## Key Design Principles
 
-1. **Separation of concerns** — each package/service can be developed and tested independently.
-2. **Cheap at runtime, expensive upfront** — the heavy AI pipeline runs once; generated checks run on every commit for free.
-3. **Open taxonomy** — the Knowledge Base taxonomy is a living tree; new vulnerability classes can be added without code changes.
-4. **LLM-agnostic** — agent invocation goes through a thin interface; Gemini, Claude, or a local model are all plug-in replacements.
-5. **Explainability** — every generated check must cite the Intel document that triggered it (traceable).
+1. **Separation of concerns** — reviewbot handles GitHub auth and git ops; claude-runner handles AI; n8n handles orchestration logic and prompts
+2. **Prompts live in n8n** — changing a prompt doesn't require redeploying code; update the n8n workflow
+3. **KB-first** — before any analysis, claude checks AnythingLLM for prior work to avoid redundant effort
+4. **Explainability** — every generated CI check has a commit message with a "Why:" explanation
+5. **Cheap at runtime** — expensive AI pipeline runs once; generated checks run on every commit for free
+6. **LLM-agnostic** — claude-runner pattern can be replicated for gemini-runner with the same API shape
 
 ---
 
-## System Overview Diagram
+## Repository Layout
+
+```
+reviewbot/
+├── main.go                          — HTTP server, endpoint registration
+├── internal/
+│   ├── config/config.go             — env-var config (incl. SharedReposDir)
+│   ├── github/
+│   │   ├── client.go                — GitHub App client factory
+│   │   └── webhook.go               — webhook validation + event routing
+│   ├── handler/
+│   │   ├── handler.go               — ClientFactory / TransportFactory interfaces
+│   │   ├── comment.go               — @reviewbot mention → dispatch to n8n
+│   │   ├── pullrequest.go           — PR opened (no-op; pipeline triggered by mention only)
+│   │   ├── ping.go                  — GitHub ping event handler
+│   │   └── github_ops.go            — /git/checkout and /git/create-pr handlers
+│   ├── git/git.go                   — low-level git helpers (clone, branch, push, commit)
+│   ├── middleware/logging.go        — request logging middleware
+│   └── oauth/oauth.go               — OAuth callback for app installation
+│
+├── services/
+│   ├── claude-runner/               — AI agent runner (Go + claude CLI)
+│   │   ├── main.go                  — POST /review handler (supports workdir)
+│   │   └── Dockerfile
+│   └── kb-maintainer/               — AnythingLLM sync service (Go)
+│
+├── n8n/
+│   └── schemas/
+│       ├── inbox_handler.json       — MAIN: full security review pipeline
+│       ├── claude-runner-test.json  — Dev tool: test claude-runner directly
+│       └── poc-review-pipeline.json — Legacy POC (superseded)
+│
+├── intels/                          — Intel markdown files (synced to AnythingLLM)
+├── docs/                            — Additional documentation
+└── docker-compose.yml               — Full stack definition
+```
+
+---
+
+## Mermaid Diagram
 
 ```mermaid
 graph TB
     subgraph GITHUB["☁️ GitHub"]
-        GH_PR["PR / Push Event"]
+        GH_COMMENT["@reviewbot mention"]
         GH_API["GitHub API"]
+        GH_PR["New PR with CI checks"]
     end
 
-    subgraph REVIEWBOT["🤖 ReviewBot System (self-hosted)"]
+    subgraph STACK["🤖 ReviewBot Stack (self-hosted)"]
         direction TB
 
-        subgraph TRIGGER["Entry Point"]
-            APP["github-app\n(Go webhook server)"]
+        RB["reviewbot\n(Go webhook server)\n/git/checkout\n/git/create-pr"]
+
+        N8N["n8n\n(inbox_handler workflow)\nOrchestrates all steps\nHolds all prompts"]
+
+        CR["claude-runner\n(Go + claude CLI)\nPOST /review\nworkdir support"]
+
+        subgraph KB["Knowledge Base"]
+            ALLM["AnythingLLM\n(RAG / vector search)"]
+            KBM["kb-maintainer\n(sync service)"]
+            INTELS[("intels/*.md\nIntel library")]
         end
 
-        subgraph PIPELINE["Pipeline Engine"]
-            N8N["n8n\n(workflow orchestrator)"]
-        end
-
-        subgraph INTEL["Intelligence Layer"]
-            ANYLLM["AnythingLLM\n(RAG / KB)"]
-            KBMAINT["kb-maintainer\n(sync service, Go)"]
-            INTELS[("intels/\n*.md files")]
-        end
-
-        subgraph AGENTS["AI Agent Containers"]
-            direction LR
-            PROFILER["Profiler Agent\n(containerized)"]
-            REVIEWER["Review Agent(s)\n(containerized)"]
-            CHECKER["Check Generator\n(containerized)"]
-        end
-
-        subgraph MCP["MCP Layer"]
-            MCPSERVER["mcp-anythingllm\n(MCP server, inside containers)"]
-        end
+        SHARED[("shared-repos volume\n/shared/repos/{owner}-{repo}-pr{N}-{ts}")]
     end
 
-    GH_PR -->|webhook| APP
-    APP -->|trigger pipeline| N8N
-
-    N8N -->|1. checkout repo| PROFILER
-    PROFILER -->|2. topics list| N8N
-    N8N -->|3. KB lookup per topic| ANYLLM
-    ANYLLM -->|4. relevant intel docs| N8N
-    N8N -->|5. review task + intel| REVIEWER
-    REVIEWER -->|query KB via MCP| MCPSERVER
-    MCPSERVER -->|REST| ANYLLM
-    REVIEWER -->|6. findings| N8N
-    N8N -->|7. confirmed findings| CHECKER
-    CHECKER -->|8. CI/CD YAML| N8N
-    N8N -->|9. open PR| GH_API
-
-    INTELS -->|watch & sync| KBMAINT
-    KBMAINT -->|REST API| ANYLLM
-
-    style GITHUB fill:#24292e,color:#fff,stroke:#444
-    style REVIEWBOT fill:#1a1a2e,color:#eee,stroke:#555
-    style PIPELINE fill:#16213e,color:#eee,stroke:#0f3460
-    style INTEL fill:#0f3460,color:#eee,stroke:#533483
-    style AGENTS fill:#533483,color:#eee,stroke:#e94560
-    style MCP fill:#2d2d44,color:#eee,stroke:#533483
-    style TRIGGER fill:#1a1a2e,color:#eee,stroke:#666
-```
-
----
-
-## Pipeline Execution Sequence
-
-```mermaid
-sequenceDiagram
-    participant GH as GitHub
-    participant APP as github-app
-    participant N8N as n8n Engine
-    participant KB as AnythingLLM (KB)
-    participant PA as Profiler Agent
-    participant RA as Review Agent(s)
-    participant CG as Check Generator
-
-    GH->>APP: Webhook (PR opened)
-    APP->>N8N: Trigger pipeline
-
-    N8N->>PA: Checkout repo + "what's here?"
-    PA-->>N8N: Topics: [web-server, sql, github-actions, ...]
-
-    loop Per topic (parallel)
-        N8N->>KB: Search by tag/taxonomy
-        KB-->>N8N: Matching intel docs
-    end
-
-    loop Per intel doc (parallel)
-        N8N->>RA: Intel + relevant code snippets
-        RA->>KB: Query KB via MCP (extra context)
-        KB-->>RA: Context
-        RA-->>N8N: Confirmed / not-applicable + evidence
-    end
-
-    N8N->>CG: Confirmed findings list
-    CG-->>N8N: GitHub Actions YAML / shell checks
-
-    N8N->>GH: Open PR with generated CI/CD checks
-```
-
----
-
-## Key Architectural Decisions
-
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| **Knowledge Base** | AnythingLLM (self-hosted) | Avoids building RAG from scratch; REST API + web UI; per-repo workspaces prevent context bleed |
-| **Pipeline Orchestration** | n8n | Visual, self-hosted, built-in error handling & retry; configurable without redeploy |
-| **Agent Execution** | Containerized Claude / Gemini | Async callback keeps n8n lightweight; parallel execution; easy model swap |
-| **KB Access from Agents** | `mcp-anythingllm` MCP server | Agents query KB natively as a tool — no custom API code per executor |
-| **Intel Sync** | `kb-maintainer` Go service | File-watcher → AnythingLLM REST; drop/edit/delete a `.md` = instant index update |
-| **Review Strategy** | Expensive AI once → lightweight CI forever | Generated checks run on every commit for free; AI re-invoked only on explicit re-review |
-| **LLM Agnosticism** | Thin interface; Gemini / Claude / local | Any model plugs in without changing orchestration; container per model |
-
----
-
-## Data Flow: Intel Lifecycle
-
-```mermaid
-flowchart LR
-    A["Author writes\nintels/*.md"] -->|git commit| B["intels/ directory"]
-    B -->|file event| C["kb-maintainer"]
-    C -->|REST POST| D["AnythingLLM\nworkspace"]
-    D -->|embed + index| E["Vector + BM25\nhybrid index"]
-    E -->|search at review time| F["Relevant intel\nreturned to agents"]
+    GH_COMMENT -->|webhook| RB
+    RB -->|POST reviewbot-inbox| N8N
+    N8N -->|POST /git/checkout| RB
+    RB -->|clone| SHARED
+    N8N -->|POST /review workdir=...| CR
+    CR -->|reads/writes| SHARED
+    CR <-->|MCP tools| ALLM
+    N8N -->|POST /git/create-pr| RB
+    RB -->|push + create PR| GH_API
+    GH_API --> GH_PR
+    N8N -->|POST comment| GH_API
+    INTELS -->|file watch| KBM
+    KBM -->|REST API| ALLM
 ```

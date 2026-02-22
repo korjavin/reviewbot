@@ -13,13 +13,15 @@ import (
 	gh "github.com/google/go-github/v68/github"
 )
 
-// reviewJob is the payload sent to the n8n webhook for async review processing.
+// reviewJob is the payload sent to the n8n inbox_handler webhook.
 type reviewJob struct {
-	Owner       string `json:"owner"`
-	Repo        string `json:"repo"`
-	PRNumber    int    `json:"pr_number"`
-	CommentBody string `json:"comment_body"`
-	CommentID   int64  `json:"comment_id"`
+	Owner         string `json:"owner"`
+	Repo          string `json:"repo"`
+	CloneURL      string `json:"clone_url"`
+	DefaultBranch string `json:"default_branch"`
+	PRNumber      int    `json:"pr_number"`
+	CommentBody   string `json:"comment_body"`
+	CommentID     int64  `json:"comment_id"`
 }
 
 func HandleIssueComment(newClient ClientFactory, newTransport TransportFactory, n8nWebhookURL string, event *gh.IssueCommentEvent) {
@@ -82,11 +84,13 @@ func HandleIssueComment(newClient ClientFactory, newTransport TransportFactory, 
 	}
 
 	job := reviewJob{
-		Owner:       owner,
-		Repo:        repoName,
-		PRNumber:    issueNumber,
-		CommentBody: commentBody,
-		CommentID:   commentID,
+		Owner:         owner,
+		Repo:          repoName,
+		CloneURL:      repo.GetCloneURL(),
+		DefaultBranch: repo.GetDefaultBranch(),
+		PRNumber:      issueNumber,
+		CommentBody:   commentBody,
+		CommentID:     commentID,
 	}
 
 	if err := dispatchToN8N(n8nWebhookURL, token, job); err != nil {

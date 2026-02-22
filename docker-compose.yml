@@ -24,6 +24,11 @@ services:
       - PORT=${PORT:-8080}
       - BASE_URL=${BASE_URL}
       - N8N_WEBHOOK_URL=${N8N_WEBHOOK_URL}
+      # Shared volume root for checked-out repos (must match claude-runner mount)
+      - SHARED_REPOS_DIR=/shared/repos
+    volumes:
+      # Shared volume: reviewbot clones repos here; claude-runner runs agents here
+      - shared-repos:/shared
 
   # ──────────────────────────────────────────────
   # n8n — Pipeline Executor
@@ -147,6 +152,8 @@ services:
       # user-scope MCP config) and ~/.claude/ (session data) survive restarts.
       # Log in once with: docker exec -it claude-runner claude auth
       - claude-home:/home/claude
+      # Shared volume: receives pre-cloned repos from reviewbot's /git/checkout
+      - shared-repos:/shared
     depends_on:
       - anythingllm
 
@@ -155,6 +162,9 @@ volumes:
   anythingllm-data:
   kb-maintainer-state:
   claude-home:
+  # Shared volume: reviewbot checks out repos here; claude-runner runs agents here.
+  # Both containers mount this at /shared (reviewbot uses /shared/repos).
+  shared-repos:
 
 networks:
   traefik_network:

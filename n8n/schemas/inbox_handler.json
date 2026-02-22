@@ -1,0 +1,353 @@
+{
+  "name": "ReviewBot — Inbox Handler",
+  "nodes": [
+    {
+      "id": "node-webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "webhookId": "reviewbot-inbox",
+      "parameters": {
+        "path": "reviewbot-inbox",
+        "httpMethod": "POST",
+        "responseMode": "onReceived",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "notes": "Entry point: triggered by reviewbot when @reviewbot is mentioned.\nReviewbot POSTs: { owner, repo, clone_url, default_branch, pr_number, comment_body, comment_id }\nGitHub installation token is sent in Authorization: Bearer <token> header."
+    },
+    {
+      "id": "node-extract-fields",
+      "name": "Extract Fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "// Pull fields from the incoming webhook payload and auth header.\nconst raw = $input.first().json;\nconst body = raw.body ?? raw;\nconst headers = raw.headers ?? {};\n\n// Extract GitHub installation token from Authorization header.\nconst authHeader = headers.authorization ?? headers.Authorization ?? '';\nconst github_token = authHeader.replace(/^Bearer\\s+/i, '').trim();\n\nif (!body.owner || !body.repo) {\n  throw new Error('Missing required fields: owner, repo');\n}\nif (!github_token) {\n  throw new Error('Missing Authorization header (expected Bearer <github_token>)');\n}\n\nreturn [{\n  json: {\n    owner: body.owner,\n    repo: body.repo,\n    clone_url: body.clone_url || `https://github.com/${body.owner}/${body.repo}.git`,\n    default_branch: body.default_branch || 'main',\n    pr_number: body.pr_number || 0,\n    comment_body: body.comment_body || '',\n    comment_id: body.comment_id || 0,\n    github_token\n  }\n}];"
+      },
+      "notes": "Extracts owner, repo, pr_number, github_token (from Authorization header), etc."
+    },
+    {
+      "id": "node-checkout-repo",
+      "name": "Checkout Repo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "http://reviewbot:8080/git/checkout",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"owner\": {{ JSON.stringify($json.owner) }},\n  \"repo\": {{ JSON.stringify($json.repo) }},\n  \"github_token\": {{ JSON.stringify($json.github_token) }},\n  \"pr_number\": {{ $json.pr_number }}\n}",
+        "options": { "timeout": 120000 }
+      },
+      "notes": "Clones the repo into an isolated directory on the shared volume.\nReturns: { repo_path, branch, default_branch }"
+    },
+    {
+      "id": "node-sanitize",
+      "name": "Sanitize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [980, 300],
+      "parameters": {
+        "jsCode": "// Sanitization step — no-op for now.\n// Future: scan for malicious content in repo, validate inputs, rate-limit per owner, etc.\nconst fields = $('Extract Fields').first().json;\nconst checkout = $input.first().json;\n\nreturn [{\n  json: {\n    owner: fields.owner,\n    repo: fields.repo,\n    pr_number: fields.pr_number,\n    comment_body: fields.comment_body,\n    comment_id: fields.comment_id,\n    github_token: fields.github_token,\n    repo_path: checkout.repo_path,\n    branch: checkout.branch,\n    default_branch: checkout.default_branch || fields.default_branch\n  }\n}];"
+      },
+      "notes": "No-op sanitization pass. Merges checkout result with original fields.\nFuture: detect malicious files, obfuscated code, rate limiting."
+    },
+    {
+      "id": "node-post-ack",
+      "name": "Post Acknowledgement",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1240, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.github.com/repos/{{ $json.owner }}/{{ $json.repo }}/issues/{{ $json.pr_number }}/comments",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $json.github_token }}" },
+            { "name": "Accept", "value": "application/vnd.github+json" },
+            { "name": "X-GitHub-Api-Version", "value": "2022-11-28" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={ \"body\": \"🤖 **ReviewBot** is on it! I'm analyzing `{{ $json.owner }}/{{ $json.repo }}` for security improvements.\\n\\nThis may take a few minutes. I'll open a Pull Request with CI checks when done.\" }",
+        "options": { "timeout": 10000 }
+      },
+      "notes": "Posts an immediate acknowledgement comment to the issue/PR so the user knows the bot is working."
+    },
+    {
+      "id": "node-build-understanding-prompt",
+      "name": "Build Understanding Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 300],
+      "parameters": {
+        "jsCode": "const ctx = $('Sanitize').first().json;\nconst ts = new Date().toISOString().replace(/[-:]/g, '').substring(0, 15);\nconst docName = `${ctx.repo}-${ts}-understanding`;\n\nconst prompt = `You are a security-focused code reviewer analyzing the repository ${ctx.owner}/${ctx.repo}.\n\nIMPORTANT: First call initialize_anythingllm with no arguments to enable knowledge base access.\n\nSTEP 1 — Check existing knowledge:\nSearch the AnythingLLM knowledge base for any existing analysis of this repository:\n- Search for \"${ctx.repo}\" and \"${ctx.owner}/${ctx.repo}\"\n- If you find previous analysis documents, read them for context and note what is already known\n\nSTEP 2 — Analyze the codebase:\nExamine the code in the current directory. Focus on:\n- Main programming language(s) and framework versions\n- Service architecture (web servers, databases, external APIs, queues, etc.)\n- CI/CD setup: check .github/workflows/, Makefile, Dockerfile, etc.\n- Authentication and authorization patterns\n- Data handling: what sensitive data is stored and how\n- Key security attack surfaces\n\nSTEP 3 — Store findings:\nStore your analysis in AnythingLLM using a document named \"${docName}\" containing:\n- Detected languages and key frameworks\n- Architecture overview\n- Existing CI/CD tooling\n- Top security-relevant observations\n\nSTEP 4 — Output summary:\nOutput a concise markdown summary covering the tech stack, architecture, and top 3-5 security-relevant observations.`;\n\nreturn [{ json: { ...ctx, prompt, doc_name: docName } }];"
+      },
+      "notes": "Constructs the prompt for the 'general understanding' claude-runner step.\nThe prompt instructs claude to check AnythingLLM for prior analysis and store findings."
+    },
+    {
+      "id": "node-general-understanding",
+      "name": "General Understanding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "http://claude-runner:8080/review",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"owner\": {{ JSON.stringify($json.owner) }},\n  \"repo\": {{ JSON.stringify($json.repo) }},\n  \"pr_number\": {{ $json.pr_number }},\n  \"workdir\": {{ JSON.stringify($json.repo_path) }},\n  \"prompt\": {{ JSON.stringify($json.prompt) }}\n}",
+        "options": { "timeout": 660000 }
+      },
+      "notes": "Runs claude in the cloned repo to understand the codebase and store findings in AnythingLLM KB.\nTimeout: 11 min."
+    },
+    {
+      "id": "node-build-find-checks-prompt",
+      "name": "Build Find Checks Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2020, 300],
+      "parameters": {
+        "jsCode": "const ctx = $('Sanitize').first().json;\nconst understanding = $input.first().json.review ?? '';\n\nconst prompt = `You are a CI/CD security advisor for the repository ${ctx.owner}/${ctx.repo}.\n\nIMPORTANT: First call initialize_anythingllm with no arguments.\n\nContext from the general understanding step:\n${understanding.substring(0, 3000)}\n\nSearch AnythingLLM for:\n1. The understanding document for this repo (search \"${ctx.repo} understanding\")\n2. Relevant security intel for the detected language and framework\n\nBased on the codebase analysis and security knowledge, identify exactly 2-3 CI checks that would provide the highest security and quality value. Each check must:\n- Be appropriate for the detected primary language\n- Be implementable as a GitHub Actions workflow step\n- NOT already exist in the current CI configuration\n- Provide clear security or quality value\n\nCRITICAL OUTPUT FORMAT:\nOutput ONLY a valid JSON array — no markdown, no prose, no code fences:\n[\n  {\n    \"name\": \"check-identifier-slug\",\n    \"description\": \"What this check does and exactly how to implement it\",\n    \"reason\": \"Why this specific repo needs this check right now\"\n  }\n]`;\n\nreturn [{ json: { ...ctx, prompt } }];"
+      },
+      "notes": "Constructs the prompt to find 2-3 high-value CI checks to implement."
+    },
+    {
+      "id": "node-find-ci-checks",
+      "name": "Find CI Checks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2280, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "http://claude-runner:8080/review",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"owner\": {{ JSON.stringify($json.owner) }},\n  \"repo\": {{ JSON.stringify($json.repo) }},\n  \"pr_number\": {{ $json.pr_number }},\n  \"workdir\": {{ JSON.stringify($json.repo_path) }},\n  \"prompt\": {{ JSON.stringify($json.prompt) }}\n}",
+        "options": { "timeout": 660000 }
+      },
+      "notes": "Runs claude to identify 2-3 CI checks to implement.\nExpects JSON array output: [{name, description, reason}, ...]"
+    },
+    {
+      "id": "node-parse-checks",
+      "name": "Parse Checks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2540, 300],
+      "parameters": {
+        "jsCode": "const ctx = $('Sanitize').first().json;\nconst raw = $input.first().json.review ?? '';\n\n// Claude may wrap JSON in markdown code fences — extract the array.\nlet checks;\ntry {\n  const jsonMatch = raw.match(/\\[[\\s\\S]*\\]/);\n  checks = JSON.parse(jsonMatch ? jsonMatch[0] : raw);\n  if (!Array.isArray(checks)) throw new Error('not an array');\n} catch (e) {\n  // Fallback: single generic check so the pipeline always continues.\n  console.log('WARN: could not parse checks JSON, using fallback. Raw output:', raw.substring(0, 500));\n  checks = [{\n    name: 'dependency-audit',\n    description: 'Add a dependency vulnerability audit step using the language-appropriate tool',\n    reason: 'No automated dependency vulnerability scanning detected in CI'\n  }];\n}\n\n// Cap at 3 checks.\nchecks = checks.slice(0, 3);\n\n// Emit one item per check, each carrying the full pipeline context.\nreturn checks.map(check => ({\n  json: {\n    owner: ctx.owner,\n    repo: ctx.repo,\n    pr_number: ctx.pr_number,\n    github_token: ctx.github_token,\n    repo_path: ctx.repo_path,\n    branch: ctx.branch,\n    default_branch: ctx.default_branch,\n    check_name: check.name,\n    check_description: check.description,\n    check_reason: check.reason\n  }\n}));"
+      },
+      "notes": "Parses the JSON array of CI checks from the Find CI Checks step.\nEmits one item per check — each item carries full pipeline context for the loop."
+    },
+    {
+      "id": "node-loop-over-checks",
+      "name": "Loop Over Checks",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [2800, 300],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "notes": "Iterates over each CI check one at a time (sequential commits).\nOutput 0 (done) → Create PR\nOutput 1 (batch) → Build Implement Prompt"
+    },
+    {
+      "id": "node-build-implement-prompt",
+      "name": "Build Implement Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2800, 540],
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\n\nconst prompt = `You are a CI/CD security engineer implementing checks for the repository ${item.owner}/${item.repo}.\n\nIMPORTANT: First call initialize_anythingllm with no arguments.\n\nSearch AnythingLLM for relevant intel about implementing \"${item.check_name}\" and any related security patterns.\n\nYou need to implement this CI check:\n- Name: ${item.check_name}\n- Description: ${item.check_description}\n- Reason: ${item.check_reason}\n\nThe repository code is in the current directory. A review branch has already been created.\n\nInstructions:\n1. Examine the existing CI configuration in .github/workflows/\n2. Determine the correct implementation approach for this repo's language and CI setup\n3. Create or modify workflow files as needed\n4. Add any required configuration files (e.g. .golangci.yml, .semgrepignore, etc.)\n5. Configure the check to run on: push to main/master AND pull_request events\n\nAfter implementing, commit with:\n  git add -A\n  git commit -m \"ci: add ${item.check_name}\\n\\nWhy: ${item.check_reason}\"\n\nThe commit message MUST contain a 'Why:' line explaining the security benefit.\nDo NOT push — commit only.\n\nOutput a brief summary of what was implemented and what the commit hash is.`;\n\nreturn [{ json: { ...item, prompt } }];"
+      },
+      "notes": "Builds the implementation prompt for the current check in the loop.\nInstructs claude to commit (but not push) the change."
+    },
+    {
+      "id": "node-implement-check",
+      "name": "Implement Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3060, 540],
+      "parameters": {
+        "method": "POST",
+        "url": "http://claude-runner:8080/review",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"owner\": {{ JSON.stringify($json.owner) }},\n  \"repo\": {{ JSON.stringify($json.repo) }},\n  \"pr_number\": {{ $json.pr_number }},\n  \"workdir\": {{ JSON.stringify($json.repo_path) }},\n  \"prompt\": {{ JSON.stringify($json.prompt) }}\n}",
+        "options": { "timeout": 660000 }
+      },
+      "notes": "Runs claude to implement one CI check.\nclaude commits changes locally; does NOT push.\nTimeout: 11 min per check."
+    },
+    {
+      "id": "node-create-pr",
+      "name": "Create PR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3060, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "http://reviewbot:8080/git/create-pr",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"owner\": {{ JSON.stringify($('Sanitize').first().json.owner) }},\n  \"repo\": {{ JSON.stringify($('Sanitize').first().json.repo) }},\n  \"github_token\": {{ JSON.stringify($('Sanitize').first().json.github_token) }},\n  \"repo_path\": {{ JSON.stringify($('Sanitize').first().json.repo_path) }},\n  \"branch\": {{ JSON.stringify($('Sanitize').first().json.branch) }},\n  \"base\": {{ JSON.stringify($('Sanitize').first().json.default_branch) }},\n  \"title\": {{ JSON.stringify('reviewbot: add security CI checks to ' + $('Sanitize').first().json.owner + '/' + $('Sanitize').first().json.repo) }},\n  \"body\": \"## 🤖 ReviewBot Security CI Checks\\n\\nThis PR adds automated security checks to your CI pipeline.\\n\\nEach check was selected based on:\\n- Analysis of this repository's tech stack and architecture\\n- ReviewBot's security knowledge base (intel library)\\n- Existing CI gaps found during code review\\n\\n### What's included\\n\\nSee the individual commits for details — each commit message explains **why** that specific check was added.\\n\\n---\\n_Generated by [ReviewBot](https://github.com/korjavin/reviewbot)_\"\n}",
+        "options": { "timeout": 30000 }
+      },
+      "notes": "Pushes the review branch and opens a GitHub PR.\nReturns: { pr_url, pr_number }"
+    },
+    {
+      "id": "node-post-pr-comment",
+      "name": "Post PR Link Comment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3320, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.github.com/repos/{{ $('Sanitize').first().json.owner }}/{{ $('Sanitize').first().json.repo }}/issues/{{ $('Sanitize').first().json.pr_number }}/comments",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $('Sanitize').first().json.github_token }}" },
+            { "name": "Accept", "value": "application/vnd.github+json" },
+            { "name": "X-GitHub-Api-Version", "value": "2022-11-28" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={ \"body\": \"✅ **ReviewBot** is done!\\n\\nI've opened a Pull Request with security CI checks:\\n👉 {{ $json.pr_url }}\\n\\nEach commit explains **why** that check was added. Review, adjust, and merge when ready!\" }",
+        "options": { "timeout": 10000 }
+      },
+      "notes": "Posts the PR link back to the original issue/PR comment thread."
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [{ "node": "Extract Fields", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract Fields": {
+      "main": [
+        [{ "node": "Checkout Repo", "type": "main", "index": 0 }]
+      ]
+    },
+    "Checkout Repo": {
+      "main": [
+        [{ "node": "Sanitize", "type": "main", "index": 0 }]
+      ]
+    },
+    "Sanitize": {
+      "main": [
+        [{ "node": "Post Acknowledgement", "type": "main", "index": 0 }]
+      ]
+    },
+    "Post Acknowledgement": {
+      "main": [
+        [{ "node": "Build Understanding Prompt", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Understanding Prompt": {
+      "main": [
+        [{ "node": "General Understanding", "type": "main", "index": 0 }]
+      ]
+    },
+    "General Understanding": {
+      "main": [
+        [{ "node": "Build Find Checks Prompt", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Find Checks Prompt": {
+      "main": [
+        [{ "node": "Find CI Checks", "type": "main", "index": 0 }]
+      ]
+    },
+    "Find CI Checks": {
+      "main": [
+        [{ "node": "Parse Checks", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Checks": {
+      "main": [
+        [{ "node": "Loop Over Checks", "type": "main", "index": 0 }]
+      ]
+    },
+    "Loop Over Checks": {
+      "main": [
+        [{ "node": "Create PR", "type": "main", "index": 0 }],
+        [{ "node": "Build Implement Prompt", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Implement Prompt": {
+      "main": [
+        [{ "node": "Implement Check", "type": "main", "index": 0 }]
+      ]
+    },
+    "Implement Check": {
+      "main": [
+        [{ "node": "Loop Over Checks", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create PR": {
+      "main": [
+        [{ "node": "Post PR Link Comment", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": ["reviewbot", "pipeline", "security", "inbox"],
+  "meta": {
+    "templateId": "reviewbot-inbox-handler-v1",
+    "templateCredsSetupCompleted": false,
+    "instanceId": ""
+  },
+  "pinData": {}
+}
