@@ -43,41 +43,79 @@ func (c *Client) doRequest(method, path string, body io.Reader, contentType stri
 
 // ---- Workspace ---------------------------------------------------------
 
-type workspaceResponse struct {
-	Workspace *struct {
-		ID   int    `json:"id"`
-		Name string `json:"name"`
-		Slug string `json:"slug"`
-	} `json:"workspace"`
+type workspaceEntry struct {
+	Name string `json:"name"`
+	Slug string `json:"slug"`
 }
 
-// EnsureWorkspace creates the workspace if it does not already exist.
-func (c *Client) EnsureWorkspace(slug string) error {
-	resp, err := c.doRequest("GET", "/api/v1/workspace/"+slug, nil, "")
+type workspaceResponse struct {
+	Workspace *workspaceEntry `json:"workspace"`
+}
+
+type workspacesListResponse struct {
+	Workspaces []workspaceEntry `json:"workspaces"`
+}
+
+// EnsureWorkspace finds-or-creates a workspace by name and returns the actual
+// slug assigned by AnythingLLM.  AnythingLLM may auto-generate a slug that
+// differs from the workspace name (e.g. "intels-a1b2c3d4"), so we look up by
+// name via the list endpoint instead of by an assumed slug.
+func (c *Client) EnsureWorkspace(name string) (string, error) {
+	// 1. List all workspaces and search by name.
+	if slug, err := c.findWorkspaceByName(name); err != nil {
+		return "", err
+	} else if slug != "" {
+		return slug, nil
+	}
+
+	// 2. Workspace not found — create it.
+	body, _ := json.Marshal(map[string]string{"name": name})
+	resp, err := c.doRequest("POST", "/api/v1/workspace/new", bytes.NewReader(body), "application/json")
 	if err != nil {
-		return fmt.Errorf("get workspace: %w", err)
+		return "", fmt.Errorf("create workspace: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusOK {
-		var wr workspaceResponse
-		if json.NewDecoder(resp.Body).Decode(&wr) == nil && wr.Workspace != nil {
-			return nil // exists
-		}
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return "", fmt.Errorf("create workspace: status %d: %s", resp.StatusCode, respBody)
 	}
 
-	// Create workspace.
-	body, _ := json.Marshal(map[string]string{"name": slug})
-	resp2, err := c.doRequest("POST", "/api/v1/workspace/new", bytes.NewReader(body), "application/json")
+	var wr workspaceResponse
+	if err := json.Unmarshal(respBody, &wr); err == nil && wr.Workspace != nil && wr.Workspace.Slug != "" {
+		return wr.Workspace.Slug, nil
+	}
+
+	// Fallback: list again to get the actual slug just created.
+	if slug, err := c.findWorkspaceByName(name); err == nil && slug != "" {
+		return slug, nil
+	}
+	return "", fmt.Errorf("create workspace: could not determine slug after creation")
+}
+
+// findWorkspaceByName lists all workspaces and returns the slug of the first
+// one whose name matches, or "" if none found.
+func (c *Client) findWorkspaceByName(name string) (string, error) {
+	resp, err := c.doRequest("GET", "/api/v1/workspaces", nil, "")
 	if err != nil {
-		return fmt.Errorf("create workspace: %w", err)
+		return "", fmt.Errorf("list workspaces: %w", err)
 	}
-	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusOK && resp2.StatusCode != http.StatusCreated {
-		b, _ := io.ReadAll(resp2.Body)
-		return fmt.Errorf("create workspace: status %d: %s", resp2.StatusCode, b)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("list workspaces: status %d: %s", resp.StatusCode, b)
 	}
-	return nil
+
+	var lr workspacesListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&lr); err != nil {
+		return "", fmt.Errorf("decode workspaces list: %w", err)
+	}
+	for _, w := range lr.Workspaces {
+		if w.Name == name {
+			return w.Slug, nil
+		}
+	}
+	return "", nil // not found
 }
 
 // ---- Document upload ----------------------------------------------------

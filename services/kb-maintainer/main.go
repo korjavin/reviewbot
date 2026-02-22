@@ -33,9 +33,17 @@ func main() {
 	syncer := NewSyncer(cfg, client, state)
 
 	// Wait for AnythingLLM to be reachable before proceeding (up to 5 min).
-	if err := retryUntilReady(client, cfg.WorkspaceSlug, 5*time.Minute); err != nil {
+	// retryUntilReady returns the actual workspace slug assigned by AnythingLLM,
+	// which may differ from the configured name (e.g. "intels-a1b2c3d4").
+	actualSlug, err := retryUntilReady(client, cfg.WorkspaceSlug, 5*time.Minute)
+	if err != nil {
 		slog.Error("AnythingLLM not reachable", "err", err)
 		os.Exit(1)
+	}
+	if actualSlug != cfg.WorkspaceSlug {
+		slog.Info("workspace slug differs from configured name, using actual slug",
+			"configured", cfg.WorkspaceSlug, "actual", actualSlug)
+		cfg.WorkspaceSlug = actualSlug
 	}
 
 	// Initial full sync.
@@ -118,18 +126,18 @@ func handleFSEvent(syncer *Syncer, event fsnotify.Event) {
 }
 
 // retryUntilReady calls EnsureWorkspace with exponential backoff until it
-// succeeds or deadline is exceeded.
-func retryUntilReady(client *Client, workspaceSlug string, deadline time.Duration) error {
+// succeeds or deadline is exceeded. It returns the actual workspace slug.
+func retryUntilReady(client *Client, workspaceName string, deadline time.Duration) (string, error) {
 	start := time.Now()
 	backoff := 5 * time.Second
 	for {
-		err := client.EnsureWorkspace(workspaceSlug)
+		slug, err := client.EnsureWorkspace(workspaceName)
 		if err == nil {
-			return nil
+			return slug, nil
 		}
 		elapsed := time.Since(start)
 		if elapsed+backoff > deadline {
-			return err
+			return "", err
 		}
 		slog.Warn("AnythingLLM not ready, retrying", "err", err, "retry_in", backoff.String())
 		time.Sleep(backoff)
