@@ -45,10 +45,23 @@ func Push(dir, token, owner, repo, branch string) error {
 	return nil
 }
 
-func run(dir string, name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+// Run executes a git command in dir and returns combined output.
+func Run(dir string, args ...string) ([]byte, error) {
+	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
+	return cmd.CombinedOutput()
+}
+
+func run(dir string, name string, args ...string) error {
+	var out []byte
+	var err error
+	if name == "git" {
+		out, err = Run(dir, args...)
+	} else {
+		cmd := exec.Command(name, args...)
+		cmd.Dir = dir
+		out, err = cmd.CombinedOutput()
+	}
 	if err != nil {
 		return fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, string(out))
 	}
