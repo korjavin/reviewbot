@@ -4,7 +4,7 @@ services:
   # ReviewBot — GitHub App / Webhook handler
   # ──────────────────────────────────────────────
   reviewbot:
-    image: ghcr.io/korjavin/reviewbot:latest
+    image: ghcr.io/korjavin/reviewbot:425788708aada80af8f65e8255cd7490f33d7622
     container_name: reviewbot
     networks:
       - traefik_network
@@ -113,7 +113,7 @@ services:
   # the AnythingLLM workspace via REST API
   # ──────────────────────────────────────────────
   kb-maintainer:
-    image: ghcr.io/korjavin/reviewbot-kb-maintainer:latest
+    image: ghcr.io/korjavin/reviewbot-kb-maintainer:425788708aada80af8f65e8255cd7490f33d7622
     container_name: kb-maintainer
     restart: unless-stopped
     networks:
@@ -138,7 +138,7 @@ services:
   # and returns the review text.
   # ──────────────────────────────────────────────
   claude-runner:
-    image: ghcr.io/korjavin/reviewbot-claude-runner:latest
+    image: ghcr.io/korjavin/reviewbot-claude-runner:425788708aada80af8f65e8255cd7490f33d7622
     container_name: claude-runner
     restart: unless-stopped
     networks:
