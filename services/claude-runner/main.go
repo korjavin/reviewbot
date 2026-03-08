@@ -88,8 +88,35 @@ func handleReview(w http.ResponseWriter, r *http.Request) {
 	var workDir string
 
 	if req.Workdir != "" {
+		// Validate that workdir is within the allowed base directory to prevent arbitrary read.
+		allowedBase := os.Getenv("ALLOWED_WORKDIR_BASE")
+		if allowedBase == "" {
+			allowedBase = "/shared"
+		}
+
+		absAllowedBase, err := filepath.Abs(allowedBase)
+		if err != nil {
+			slog.Error("failed to get absolute path of allowed base", "err", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		absWorkdir, err := filepath.Abs(req.Workdir)
+		if err != nil {
+			slog.Error("failed to get absolute path of workdir", "err", err)
+			http.Error(w, "invalid workdir", http.StatusBadRequest)
+			return
+		}
+
+		rel, err := filepath.Rel(absAllowedBase, absWorkdir)
+		if err != nil || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+			slog.Error("workdir outside of allowed base", "workdir", req.Workdir, "allowedBase", allowedBase)
+			http.Error(w, "forbidden workdir", http.StatusForbidden)
+			return
+		}
+
 		// Use the pre-cloned directory — no cloning needed.
-		workDir = req.Workdir
+		workDir = absWorkdir
 		if _, err := os.Stat(workDir); err != nil {
 			slog.Error("workdir not found", "dir", workDir, "err", err)
 			http.Error(w, "workdir not found", http.StatusBadRequest)
