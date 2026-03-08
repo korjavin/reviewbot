@@ -145,14 +145,18 @@ func handleReview(w http.ResponseWriter, r *http.Request) {
 		slog.Debug("cloning repo", "url", cloneURLSafe, "dir", workDir)
 		gitCmd := exec.Command("git", "clone", "--depth=1", cloneURL, ".")
 		gitCmd.Dir = workDir
-		if out, err := gitCmd.CombinedOutput(); err != nil {
-			sanitized := strings.ReplaceAll(string(out), req.GitHubToken, "***")
+		out, err := gitCmd.CombinedOutput()
+		sanitized := string(out)
+		if req.GitHubToken != "" && strings.Contains(sanitized, req.GitHubToken) {
+			sanitized = strings.ReplaceAll(sanitized, req.GitHubToken, "***")
+		}
+
+		if err != nil {
 			slog.Error("git clone failed", "output", sanitized, "err", err)
 			http.Error(w, "clone failed", http.StatusInternalServerError)
 			return
-		} else {
-			slog.Debug("git clone succeeded", "output", strings.ReplaceAll(string(out), req.GitHubToken, "***"))
 		}
+		slog.Debug("git clone succeeded", "output", sanitized)
 	}
 
 	prompt := req.Prompt
