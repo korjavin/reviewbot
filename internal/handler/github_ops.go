@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/korjavin/reviewbot/internal/git"
 )
 
 // ── Checkout ──────────────────────────────────────────────────────────────────
@@ -63,7 +65,7 @@ func HandleCheckout(sharedReposDir string) http.HandlerFunc {
 			req.GitHubToken, req.Owner, req.Repo)
 
 		log.Printf("Cloning %s/%s into %s", req.Owner, req.Repo, repoDir)
-		if out, err := gitRun(repoDir, "git", "clone", "--depth=50", cloneURL, "."); err != nil {
+		if out, err := git.Run(repoDir, "clone", "--depth=50", cloneURL, "."); err != nil {
 			sanitized := strings.ReplaceAll(string(out), req.GitHubToken, "***")
 			log.Printf("ERROR: git clone failed: %s: %v", sanitized, err)
 			os.RemoveAll(repoDir)
@@ -74,7 +76,7 @@ func HandleCheckout(sharedReposDir string) http.HandlerFunc {
 		// Detect the default branch from the cloned HEAD.
 		defaultBranch := req.BaseBranch
 		if defaultBranch == "" {
-			if out, err := gitRun(repoDir, "git", "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
+			if out, err := git.Run(repoDir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
 				defaultBranch = strings.TrimSpace(string(out))
 			}
 		}
@@ -89,7 +91,7 @@ func HandleCheckout(sharedReposDir string) http.HandlerFunc {
 		} else {
 			branchName = fmt.Sprintf("reviewbot-%s", ts)
 		}
-		if _, err := gitRun(repoDir, "git", "checkout", "-b", branchName); err != nil {
+		if err := git.CreateBranch(repoDir, branchName); err != nil {
 			log.Printf("ERROR: creating branch %s: %v", branchName, err)
 			os.RemoveAll(repoDir)
 			http.Error(w, "branch creation failed", http.StatusInternalServerError)
@@ -153,7 +155,7 @@ func HandleCreatePR() http.HandlerFunc {
 		pushURL := fmt.Sprintf("https://x-access-token:%s@github.com/%s/%s.git",
 			req.GitHubToken, req.Owner, req.Repo)
 		log.Printf("Pushing branch %s to %s/%s", req.Branch, req.Owner, req.Repo)
-		if out, err := gitRun(req.RepoPath, "git", "push", pushURL, req.Branch); err != nil {
+		if out, err := git.Run(req.RepoPath, "push", pushURL, req.Branch); err != nil {
 			sanitized := strings.ReplaceAll(string(out), req.GitHubToken, "***")
 			log.Printf("ERROR: git push failed: %s: %v", sanitized, err)
 			http.Error(w, "push failed", http.StatusInternalServerError)
@@ -214,11 +216,3 @@ func HandleCreatePR() http.HandlerFunc {
 	}
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-// gitRun executes a git command in dir and returns combined output.
-func gitRun(dir string, name string, args ...string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
-	cmd.Dir = dir
-	return cmd.CombinedOutput()
-}
