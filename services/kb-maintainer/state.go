@@ -1,7 +1,7 @@
 package main
 
 import (
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -57,8 +57,8 @@ func (s *State) Save(path string) error {
 	return os.Rename(tmp, path)
 }
 
-// HashContent returns the MD5 hex digest of content.
+// HashContent returns the SHA-256 hex digest of content.
 func HashContent(content []byte) string {
-	sum := md5.Sum(content)
+	sum := sha256.Sum256(content)
 	return hex.EncodeToString(sum[:])
 }

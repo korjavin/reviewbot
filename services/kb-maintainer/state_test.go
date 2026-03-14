@@ -24,7 +24,7 @@ func TestLoadState(t *testing.T) {
 	validData := `{
 		"files": {
 			"test.txt": {
-				"hash": "d41d8cd98f00b204e9800998ecf8427e",
+				"hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 				"doc_location": "loc1",
 				"uploaded_at": "2023-10-27T10:00:00Z"
 			}
@@ -37,7 +37,7 @@ func TestLoadState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState failed for valid file: %v", err)
 	}
-	if len(state.Files) != 1 || state.Files["test.txt"].Hash != "d41d8cd98f00b204e9800998ecf8427e" {
+	if len(state.Files) != 1 || state.Files["test.txt"].Hash != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
 		t.Errorf("Expected 1 file in state, got %v", state.Files)
 	}
 
@@ -100,7 +100,7 @@ func TestStateSave(t *testing.T) {
 
 func TestHashContent(t *testing.T) {
 	content := []byte("hello world")
-	expected := "5eb63bbbe01eeed093cb22bb8f5acdc3"
+	expected := "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
 	actual := HashContent(content)
 	if actual != expected {
 		t.Errorf("Expected %s, got %s", expected, actual)
