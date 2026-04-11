@@ -69,14 +69,20 @@ func (c *Client) EnsureWorkspace(name string) (string, error) {
 	}
 
 	// 2. Workspace not found — create it.
-	body, _ := json.Marshal(map[string]string{"name": name})
+	body, err := json.Marshal(map[string]string{"name": name})
+	if err != nil {
+		return "", fmt.Errorf("marshal create workspace request: %w", err)
+	}
 	resp, err := c.doRequest("POST", "/api/v1/workspace/new", bytes.NewReader(body), "application/json")
 	if err != nil {
 		return "", fmt.Errorf("create workspace: %w", err)
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read create workspace response: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return "", fmt.Errorf("create workspace: status %d: %s", resp.StatusCode, respBody)
 	}
@@ -102,7 +108,10 @@ func (c *Client) findWorkspaceByName(name string) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", fmt.Errorf("list workspaces: status %d: (could not read body: %v)", resp.StatusCode, err)
+		}
 		return "", fmt.Errorf("list workspaces: status %d: %s", resp.StatusCode, b)
 	}
 
@@ -151,7 +160,10 @@ func (c *Client) UploadDocument(filename string, content []byte) (string, error)
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read upload response: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("upload: status %d: %s", resp.StatusCode, respBody)
 	}
@@ -188,10 +200,13 @@ func (c *Client) updateEmbeddings(slug string, adds, deletes []string) error {
 	if deletes == nil {
 		deletes = []string{}
 	}
-	body, _ := json.Marshal(map[string]interface{}{
+	body, err := json.Marshal(map[string]interface{}{
 		"adds":    adds,
 		"deletes": deletes,
 	})
+	if err != nil {
+		return fmt.Errorf("marshal update-embeddings request: %w", err)
+	}
 	resp, err := c.doRequest("POST", "/api/v1/workspace/"+slug+"/update-embeddings",
 		bytes.NewReader(body), "application/json")
 	if err != nil {
@@ -199,7 +214,10 @@ func (c *Client) updateEmbeddings(slug string, adds, deletes []string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("update-embeddings: status %d: (could not read body: %v)", resp.StatusCode, err)
+		}
 		return fmt.Errorf("update-embeddings: status %d: %s", resp.StatusCode, b)
 	}
 	return nil
