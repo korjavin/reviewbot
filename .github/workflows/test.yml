@@ -1,0 +1,43 @@
+name: Tests and Security Checks
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    name: Security Checks
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: 1.23
+
+      - name: Run gosec security scanner
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          # Run gosec on all modules with checks for:
+          # G115 - potential integer overflow
+          # G201-G204 - SQL/NoSQL/LDAP injection patterns
+          # G101-G104 - hardcoded secrets/credentials
+          # G301-G307 - file/path operations without validation
+          # G501-G502 - crypto weakness
+          gosec -no-fail ./... || true
+
+          # Check for HIGH severity issues and fail if found
+          OUTPUT=$(gosec -fmt=json ./... 2>/dev/null || echo "{}")
+          HIGH_COUNT=$(echo "$OUTPUT" | grep -o '"severity":"HIGH"' | wc -l)
+
+          echo "Security scan complete. HIGH severity issues found: $HIGH_COUNT"
+
+          if [ "$HIGH_COUNT" -gt 0 ]; then
+            echo "FAILED: HIGH severity security issues detected"
+            echo "$OUTPUT" | grep -A5 '"severity":"HIGH"' || true
+            exit 1
+          fi
